@@ -46,6 +46,7 @@ import api
 import appModuleHandler
 import braille
 import controlTypes
+import oleacc
 import ui
 import vision
 import winUser
@@ -398,12 +399,16 @@ def _cachedTarget(which):
 		):
 			return field
 	elif which == "chatCell":
+		table = _NavCache.chatTable
+		if table is None or _safeRole(table) != controlTypes.Role.TABLE:
+			return None
 		cell = _NavCache.lastChatCell
 		if cell is not None and _safeRole(cell) == controlTypes.Role.TABLECELL:
-			return cell
-		table = _NavCache.chatTable
-		if table is not None and _safeRole(table) == controlTypes.Role.TABLE:
-			return _quickFirstCell(table)
+			# The cell was remembered from any focus event; it counts only if it is in the chat list.
+			row = _safeParent(cell)
+			if row is not None and _safeParent(row) == table:
+				return cell
+		return _quickFirstCell(table)
 	elif which == "messageRow":
 		for container in _NavCache.messageContainers:
 			if _safeRole(container) is None:
@@ -419,14 +424,22 @@ class AppModule(_BaseAppModule):
 	scriptCategory = _("WhatsApp Desktop Access")
 
 	def chooseNVDAObjectOverlayClasses(self, obj, clsList):
+		# Runs for every object NVDA creates in WhatsApp, so it must stay cheap: a window
+		# class compare first, and for page objects a single role query (not .role, which
+		# also reads the states and is never cached).
 		try:
 			windowClass = obj.windowClassName
 		except Exception:
 			windowClass = ""
-		if windowClass == _PAGE_WINDOW_CLASS and obj.role == controlTypes.Role.POPUPMENU:
-			clsList.insert(0, SelectionPopup)
-		elif windowClass == _HOST_PANE_CLASS:
+		if windowClass == _HOST_PANE_CLASS:
 			clsList.insert(0, HostPane)
+		elif windowClass == _PAGE_WINDOW_CLASS and isinstance(obj, IAccessible):
+			try:
+				isMenuPopup = obj.IAccessibleRole == oleacc.ROLE_SYSTEM_MENUPOPUP
+			except Exception:
+				isMenuPopup = False
+			if isMenuPopup:
+				clsList.insert(0, SelectionPopup)
 		super().chooseNVDAObjectOverlayClasses(obj, clsList)
 
 	def event_gainFocus(self, obj, nextHandler):
@@ -446,21 +459,23 @@ class AppModule(_BaseAppModule):
 		nextHandler()
 
 	def _rememberFocus(self, obj):
-		"""Remember where the user is, so Alt+1 and Alt+D return there without a search."""
+		"""Remember where the user is, so Alt+1 and Alt+D return there without a search.
+
+		This runs on every focus event, so it does almost nothing: one role read, and
+		nothing that creates objects. A remembered cell is checked against the chat list
+		only when it is used (see _cachedTarget).
+		"""
 		role = _safeRole(obj)
-		states = _safeStates(obj)
-		if role == controlTypes.Role.TABLECELL and _NavCache.chatTable is not None:
-			row = _safeParent(obj)
-			table = _safeParent(row) if row is not None else None
-			if table is not None and table == _NavCache.chatTable:
-				_NavCache.lastChatCell = obj
-		elif (
-			role == controlTypes.Role.EDITABLETEXT
-			and controlTypes.State.MULTILINE in states
-			and controlTypes.State.READONLY not in states
-			and any(_safeRole(a) == controlTypes.Role.LANDMARK for a in api.getFocusAncestors())
-		):
-			_NavCache.composer = obj
+		if role == controlTypes.Role.TABLECELL:
+			_NavCache.lastChatCell = obj
+		elif role == controlTypes.Role.EDITABLETEXT:
+			states = _safeStates(obj)
+			if (
+				controlTypes.State.MULTILINE in states
+				and controlTypes.State.READONLY not in states
+				and any(_safeRole(a) == controlTypes.Role.LANDMARK for a in api.getFocusAncestors())
+			):
+				_NavCache.composer = obj
 
 	# Navigation commands --------------------------------------------------------------
 

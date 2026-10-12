@@ -48,6 +48,8 @@ This is an early version. Planned next: message reading, playing voice messages,
 
 The `diag-addon` folder holds a separate developer tool, "WhatsApp focus diagnostics". It was used to find the cause of the focus problem.
 
+**Install it only while diagnosing.** It runs on every focus event in every application, and measurements showed that it roughly doubles the time focus changes take. Disable it afterwards.
+
 - It writes one line to the NVDA log for each focus event: role, states, window, process and ancestors.
 - It never writes message text. Names are written only for controls such as buttons and edit fields, and are cut short. Typed characters are counted, never written.
 - NVDA+Shift+F9 writes a marker line. NVDA+Shift+F10 turns logging on or off.
