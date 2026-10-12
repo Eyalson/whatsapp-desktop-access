@@ -67,9 +67,11 @@ python build.py              # builds whatsappDesktopAccess-<version>.nvda-addon
 python build.py diag-addon   # builds whatsappFocusDiag-<version>.nvda-addon
 ```
 
-## Reporting problems
+## Contact and reporting problems
 
-Please open an issue in this repository. Include your NVDA version, your WhatsApp version and, if you can, the NVDA log.
+Written and maintained by Eyal Sonsino, [Sontech](https://sontech.co.il/en/). You do not need a GitHub account to reach the author: use the contact form in [English](https://sontech.co.il/en/contact/) or in [Hebrew](https://sontech.co.il/contact/).
+
+For bugs and suggestions you can also open an issue in this repository. Please include your NVDA version, your WhatsApp version and, if you can, the NVDA log.
 
 ## License
 

@@ -3,6 +3,14 @@
 All notable changes to WhatsApp Desktop Access are listed here, newest first.
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-10-12
+
+### Added
+
+- Contact details. The add-on help and the homepage link in the add-on store lead to the author's website, where there is a contact form in English and in Hebrew, so users do not need a GitHub account to reach the author.
+
+There is no change in behavior.
+
 ## [1.0.0] - 2026-10-12
 
 First version for the NVDA add-on store.
