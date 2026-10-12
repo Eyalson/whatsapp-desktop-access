@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WhatsApp Desktop Access</title>
+</head>
+<body>
+<h1>WhatsApp Desktop Access</h1>
+
+<p>An NVDA add-on that improves the accessibility of WhatsApp Desktop for Windows: the Microsoft Store app built on WinUI 3 and WebView2.</p>
+
+<h2>What it does</h2>
+
+<p>Version 0.1.0 keeps NVDA on the message field while you type.</p>
+
+<p>Without this add-on, NVDA can lose the message field after you select and delete text. NVDA announces "menu", then "pane", and stops echoing typed characters and reporting the caret until you press Tab and Shift+Tab to return to the field.</p>
+
+<p>The add-on prevents this in two ways:</p>
+<ul>
+<li>WhatsApp shows a small popup with the role "menu" next to selected text. NVDA used to move its focus to that popup, although the real keyboard focus stays in the message field. The add-on ignores the popup while an edit field in the page has the focus.</li>
+<li>When the popup closes, NVDA used to land on the window pane that hosts the page. The add-on returns the focus to the element that really has it inside the page. If that is the element NVDA already had, nothing is announced again.</li>
+</ul>
+
+<p>The add-on builds on NVDA's own WhatsApp support, which turns browse mode off by default.</p>
+
+<h2>Requirements</h2>
+
+<ul>
+<li>NVDA 2026.1 or later. Tested with NVDA 2026.2.</li>
+<li>WhatsApp Desktop from the Microsoft Store on Windows 11. Tested with version 2.2638.102.0.</li>
+</ul>
+
+<h2>Other WhatsApp add-ons</h2>
+
+<p>NVDA loads only one WhatsApp app module. If another WhatsApp add-on that includes an app module is installed and enabled, such as WhatsApp NG or WhatsApp Desktop Enhancer, disable it while you use this add-on.</p>
+
+<h2>Current limits</h2>
+
+<p>This early version fixes the focus problem only. It does not add keyboard shortcuts, message reading or other features yet.</p>
+
+<h2>Reporting problems</h2>
+
+<p>Please open an issue at <a href="https://github.com/Eyalson/whatsapp-desktop-access/issues">github.com/Eyalson/whatsapp-desktop-access</a>. Include your NVDA version, your WhatsApp version and, if you can, the NVDA log.</p>
+
+<h2>Diagnostics</h2>
+
+<p>The log lines written by this add-on start with "WA-GUARD". They never contain message text.</p>
+
+<h2>License</h2>
+
+<p>Copyright (C) 2026 Sontech - Eyal Sonsino. This add-on is covered by the GNU General Public License, version 2.</p>
+</body>
+</html>

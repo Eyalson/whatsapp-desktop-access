@@ -19,7 +19,7 @@ Background: [nvaccess/nvda#19772](https://github.com/nvaccess/nvda/issues/19772)
 
 ## Requirements
 
-- NVDA 2024.1 or later. Tested with NVDA 2026.2.
+- NVDA 2026.1 or later. Tested with NVDA 2026.2.
 - WhatsApp Desktop from the Microsoft Store on Windows 11. Tested with version 2.2638.102.0.
 
 ## Installation
