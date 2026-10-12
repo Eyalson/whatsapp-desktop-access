@@ -51,6 +51,28 @@
 
 <p>Version 1.0 fixes the focus problem and adds the three navigation commands. Reading messages, playing voice messages and reducing repeated announcements are planned for later versions.</p>
 
+<h2>Changes</h2>
+
+<h3>Version 1.0.0</h3>
+
+<p>First version for the NVDA add-on store.</p>
+<ul>
+<li>Added Alt+1, Alt+2 and Alt+D to move to the chat list, the newest message and the message field.</li>
+<li>Each command says so when there is nothing to move to, for example when no chat is open.</li>
+<li>The commands find their targets by role, so they work in every WhatsApp language and keep working when WhatsApp changes its page markup.</li>
+<li>The commands remember what they found, so repeated use is instant. The first Alt+2 in a chat still takes about a second.</li>
+<li>Added a Hebrew translation of the command names and messages.</li>
+</ul>
+
+<h3>Version 0.1.0</h3>
+
+<p>First public version, published on GitHub only.</p>
+<ul>
+<li>NVDA no longer loses the message field after you select and delete text. Before, NVDA announced "menu" and then "pane", and stopped echoing typed characters until you pressed Tab and Shift+Tab to get back into the field.</li>
+</ul>
+
+<p>The full list is in the <a href="https://github.com/Eyalson/whatsapp-desktop-access/blob/main/CHANGELOG.md">changelog on GitHub</a>.</p>
+
 <h2>Reporting problems</h2>
 
 <p>Please open an issue at <a href="https://github.com/Eyalson/whatsapp-desktop-access/issues">github.com/Eyalson/whatsapp-desktop-access</a>. Include your NVDA version, your WhatsApp version and, if you can, the NVDA log.</p>
