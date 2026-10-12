@@ -2,7 +2,19 @@
 
 An NVDA add-on that improves the accessibility of WhatsApp Desktop for Windows: the Microsoft Store app built on WinUI 3 and WebView2.
 
-## What it does (version 0.1.0)
+## What it does
+
+### Keyboard commands
+
+| Keys | Action |
+| --- | --- |
+| Alt+1 | Move to the chat list: the open chat, or the first chat |
+| Alt+2 | Move to the message list: the newest message |
+| Alt+D | Move to the message field |
+
+These keys are not used by WhatsApp itself. The targets are found by role and state, never by CSS class names, so the commands work in every WhatsApp language and survive page changes. If a target is missing, for example when no chat is open, NVDA says so. Other keys can be assigned in NVDA's Input Gestures dialog, under "WhatsApp Desktop Access".
+
+### Keeping the focus on the message field
 
 It keeps NVDA on the message field while you type.
 
@@ -30,7 +42,7 @@ NVDA loads only one WhatsApp app module. If you have another WhatsApp add-on tha
 
 ## Status and plans
 
-This is an early version that fixes the focus problem only. Planned next: navigation shortcuts, message reading, fewer repeated announcements, and reading under the mouse pointer.
+This is an early version. Planned next: message reading, playing voice messages, fewer repeated announcements, and reading under the mouse pointer.
 
 ## Focus diagnostics add-on
 

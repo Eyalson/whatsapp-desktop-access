@@ -10,9 +10,21 @@
 
 <p>An NVDA add-on that improves the accessibility of WhatsApp Desktop for Windows: the Microsoft Store app built on WinUI 3 and WebView2.</p>
 
-<h2>What it does</h2>
+<h2>Keyboard commands</h2>
 
-<p>Version 0.1.0 keeps NVDA on the message field while you type.</p>
+<ul>
+<li>Alt+1: move to the chat list. The focus goes to the open chat, or to the first chat.</li>
+<li>Alt+2: move to the message list. The focus goes to the newest message.</li>
+<li>Alt+D: move to the message field.</li>
+</ul>
+
+<p>These keys are not used by WhatsApp itself. The commands find their targets by role, so they work in every WhatsApp language and keep working when WhatsApp changes its page markup. If a target is missing, for example when no chat is open, NVDA says so.</p>
+
+<p>You can assign other keys in NVDA's Input Gestures dialog, under "WhatsApp Desktop Access".</p>
+
+<h2>Keeping the focus on the message field</h2>
+
+<p>The add-on keeps NVDA on the message field while you type.</p>
 
 <p>Without this add-on, NVDA can lose the message field after you select and delete text. NVDA announces "menu", then "pane", and stops echoing typed characters and reporting the caret until you press Tab and Shift+Tab to return to the field.</p>
 
@@ -37,7 +49,7 @@
 
 <h2>Current limits</h2>
 
-<p>This early version fixes the focus problem only. It does not add keyboard shortcuts, message reading or other features yet.</p>
+<p>This is an early version. It fixes the focus problem and adds the three navigation commands. Reading messages, playing voice messages and reducing repeated announcements are planned for later versions.</p>
 
 <h2>Reporting problems</h2>
 
@@ -45,7 +57,7 @@
 
 <h2>Diagnostics</h2>
 
-<p>The log lines written by this add-on start with "WA-GUARD". They never contain message text.</p>
+<p>The log lines written by this add-on start with "WA-GUARD" (focus handling) or "WA-NAV" (navigation commands). They never contain message text.</p>
 
 <h2>License</h2>
 

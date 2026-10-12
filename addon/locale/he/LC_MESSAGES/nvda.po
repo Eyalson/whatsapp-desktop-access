@@ -4,3 +4,24 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Language: he\n"
+
+msgid "WhatsApp Desktop Access"
+msgstr "WhatsApp Desktop Access"
+
+msgid "Move to the chat list"
+msgstr "עבור לרשימת השיחות"
+
+msgid "Move to the message list"
+msgstr "עבור לרשימת ההודעות"
+
+msgid "Move to the message field"
+msgstr "עבור לשדה כתיבת ההודעה"
+
+msgid "Chat list not found"
+msgstr "רשימת השיחות לא נמצאה"
+
+msgid "Message list not found. Open a chat first."
+msgstr "רשימת ההודעות לא נמצאה. פתח שיחה תחילה."
+
+msgid "Message field not found. Open a chat first."
+msgstr "שדה כתיבת ההודעה לא נמצא. פתח שיחה תחילה."

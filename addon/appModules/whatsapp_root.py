@@ -23,21 +23,31 @@ the hosting pane back into the element that really has the focus inside the page
 that element is the one NVDA already had, the return is silent.
 
 The same pattern was used by NVDA itself for Microsoft Teams (nvaccess/nvda#11822).
+
+Navigation
+----------
+Alt+1, Alt+2 and Alt+D move the focus to the chat list, the message list and the message
+field. The targets are found by role and state, never by CSS class names or child indices,
+so they keep working when WhatsApp changes its page markup and in every UI language.
 """
 
 import ctypes
+from collections import deque
 from ctypes import wintypes
 import time
 
+import addonHandler
 import api
 import appModuleHandler
 import braille
 import controlTypes
+import ui
 import vision
 import winUser
 from logHandler import log
 from NVDAObjects import NVDAObject
 from NVDAObjects.IAccessible import IAccessible, getNVDAObjectFromEvent
+from scriptHandler import script
 
 try:
 	# Extend NVDA's own WhatsApp support (it turns browse mode off by default) instead of replacing it.
@@ -48,7 +58,10 @@ except ImportError:
 		disableBrowseModeByDefault = True
 
 
+addonHandler.initTranslation()
+
 _LOG_TAG = "WA-GUARD"
+_NAV_LOG_TAG = "WA-NAV"
 #: Window class of the WinUI pane that hosts the WebView2.
 _HOST_PANE_CLASS = "Microsoft.UI.Content.DesktopChildSiteBridge"
 #: Window class of the Chromium window that holds the WhatsApp page.
@@ -57,6 +70,12 @@ _PAGE_WINDOW_CLASS = "Chrome_RenderWidgetHostHWND"
 _PAGE_TOP_WINDOW_CLASS = "Chrome_WidgetWin_1"
 #: How long a pending silent return stays valid, in seconds.
 _SILENT_RETURN_SECONDS = 1.0
+
+#: Limits for one search of the page, so a very large chat can never freeze NVDA.
+_SEARCH_MAX_NODES = 4000
+_SEARCH_MAX_SECONDS = 3.0
+#: How many chat rows are inspected when looking for the open chat.
+_SEARCH_MAX_CHAT_ROWS = 60
 
 _user32 = ctypes.windll.user32
 _ENUM_WINDOWS_PROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -117,13 +136,18 @@ def _pageWindow() -> int:
 	return _GuardState.pageWindow
 
 
-def _realPageFocus():
-	"""The element that really has the keyboard focus inside the WhatsApp page, or None."""
+def _pageDocument():
+	"""The root accessible object of the WhatsApp page, or None."""
 	hwnd = _pageWindow()
 	if not hwnd:
 		return None
-	document = getNVDAObjectFromEvent(hwnd, winUser.OBJID_CLIENT, 0)
-	if not document:
+	return getNVDAObjectFromEvent(hwnd, winUser.OBJID_CLIENT, 0) or None
+
+
+def _realPageFocus():
+	"""The element that really has the keyboard focus inside the WhatsApp page, or None."""
+	document = _pageDocument()
+	if document is None:
 		return None
 	try:
 		focused = document.activeChild
@@ -145,6 +169,120 @@ def _takeSilentReturn(obj) -> bool:
 		return False
 	_GuardState.silentTarget = None
 	return time.monotonic() <= _GuardState.silentUntil and obj == target
+
+
+# Navigation ---------------------------------------------------------------------------
+
+
+def _safeRole(obj):
+	try:
+		return obj.role
+	except Exception:
+		return None
+
+
+def _safeStates(obj):
+	try:
+		return obj.states
+	except Exception:
+		return set()
+
+
+def _safeChildren(obj):
+	try:
+		return obj.children or []
+	except Exception:
+		return []
+
+
+class NavigationTargets:
+	"""What one walk of the page found. Every attribute is None when it was not found."""
+
+	def __init__(self):
+		self.chatCell = None
+		self.messageRow = None
+		self.composer = None
+		self.visited = 0
+		self.timedOut = False
+
+
+def _firstChatCell(table):
+	"""The cell of the open chat in the chat list, or else the first cell."""
+	first = None
+	for rowIndex, row in enumerate(_safeChildren(table)):
+		if rowIndex >= _SEARCH_MAX_CHAT_ROWS:
+			break
+		for cell in _safeChildren(row):
+			if _safeRole(cell) != controlTypes.Role.TABLECELL:
+				continue
+			if first is None:
+				first = cell
+			if controlTypes.State.SELECTED in _safeStates(cell):
+				return cell
+	return first
+
+
+def _messageTarget(row):
+	"""The element of a message row that takes the keyboard focus."""
+	for child in _safeChildren(row):
+		if controlTypes.State.FOCUSABLE in _safeStates(child):
+			return child
+	return row
+
+
+def findNavigationTargets(root, clock=time.monotonic) -> NavigationTargets:
+	"""Walk the page once, breadth first, and pick the three navigation targets.
+
+	- Chat list: the first table; its open (selected) chat, or else its first cell.
+	  The walk never goes inside it.
+	- Message field: an edit field that is multiline or inside a landmark (the footer),
+	  preferring one that is both. The single-line search box is neither.
+	- Messages: table rows outside any table. The newest message is the last one in
+	  document order that comes before the message field. The walk never goes inside rows.
+
+	A node's position is the tuple of child indices from the root, so comparing positions
+	compares document order without asking for any geometry.
+	"""
+	targets = NavigationTargets()
+	deadline = clock() + _SEARCH_MAX_SECONDS
+	queue = deque([(root, False, ())])
+	rows = []
+	fields = []
+	while queue:
+		if targets.visited >= _SEARCH_MAX_NODES or clock() > deadline:
+			targets.timedOut = True
+			break
+		node, inLandmark, position = queue.popleft()
+		targets.visited += 1
+		for index, child in enumerate(_safeChildren(node)):
+			role = _safeRole(child)
+			childPosition = position + (index,)
+			if role == controlTypes.Role.TABLE:
+				if targets.chatCell is None:
+					targets.chatCell = _firstChatCell(child)
+				continue
+			if role == controlTypes.Role.TABLEROW:
+				rows.append((childPosition, child))
+				continue
+			if role == controlTypes.Role.EDITABLETEXT:
+				states = _safeStates(child)
+				multiline = controlTypes.State.MULTILINE in states
+				# A single-line field outside a landmark is the search box, not the message field.
+				if controlTypes.State.READONLY not in states and (inLandmark or multiline):
+					fields.append((inLandmark, multiline, childPosition, child))
+			queue.append((child, inLandmark or role == controlTypes.Role.LANDMARK, childPosition))
+	composerPosition = None
+	if fields:
+		best = max(fields, key=lambda f: (f[0], f[1]))
+		targets.composer = best[3]
+		composerPosition = best[2]
+	if rows:
+		if composerPosition is not None:
+			candidates = [r for r in rows if r[0] < composerPosition] or rows
+		else:
+			candidates = rows
+		targets.messageRow = max(candidates, key=lambda r: r[0])[1]
+	return targets
 
 
 class SelectionPopup(IAccessible):
@@ -179,6 +317,9 @@ class HostPane(NVDAObject):
 
 
 class AppModule(_BaseAppModule):
+	# Translators: The category under which this add-on's commands appear in Input Gestures.
+	scriptCategory = _("WhatsApp Desktop Access")
+
 	def chooseNVDAObjectOverlayClasses(self, obj, clsList):
 		try:
 			windowClass = obj.windowClassName
@@ -204,3 +345,63 @@ class AppModule(_BaseAppModule):
 			vision.handler.handleGainFocus(obj)
 			return
 		nextHandler()
+
+	# Navigation commands --------------------------------------------------------------
+
+	def _moveTo(self, which, notFoundMessage):
+		started = time.monotonic()
+		document = _pageDocument()
+		targets = findNavigationTargets(document) if document is not None else NavigationTargets()
+		picked = {
+			"chatCell": targets.chatCell,
+			"messageRow": targets.messageRow,
+			"composer": targets.composer,
+		}[which]
+		if picked is not None and which == "messageRow":
+			picked = _messageTarget(picked)
+		log.info(
+			"%s %s found=%s visited=%d timedOut=%s %.2fs"
+			% (
+				_NAV_LOG_TAG,
+				which,
+				picked is not None,
+				targets.visited,
+				targets.timedOut,
+				time.monotonic() - started,
+			),
+		)
+		if picked is None:
+			ui.message(notFoundMessage)
+			return
+		try:
+			picked.setFocus()
+		except Exception:
+			log.debugWarning("%s could not set focus" % _NAV_LOG_TAG, exc_info=True)
+			ui.message(notFoundMessage)
+
+	@script(
+		# Translators: Description of a command that moves the focus to the chat list.
+		description=_("Move to the chat list"),
+		gesture="kb:alt+1",
+	)
+	def script_goToChatList(self, gesture):
+		# Translators: Spoken when the chat list could not be found.
+		self._moveTo("chatCell", _("Chat list not found"))
+
+	@script(
+		# Translators: Description of a command that moves the focus to the newest message.
+		description=_("Move to the message list"),
+		gesture="kb:alt+2",
+	)
+	def script_goToMessageList(self, gesture):
+		# Translators: Spoken when the message list could not be found.
+		self._moveTo("messageRow", _("Message list not found. Open a chat first."))
+
+	@script(
+		# Translators: Description of a command that moves the focus to the message field.
+		description=_("Move to the message field"),
+		gesture="kb:alt+d",
+	)
+	def script_goToMessageField(self, gesture):
+		# Translators: Spoken when the message field could not be found.
+		self._moveTo("composer", _("Message field not found. Open a chat first."))
