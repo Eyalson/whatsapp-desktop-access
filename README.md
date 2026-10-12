@@ -42,7 +42,7 @@ NVDA loads only one WhatsApp app module. If you have another WhatsApp add-on tha
 
 ## Status and plans
 
-This is an early version. Planned next: message reading, playing voice messages, fewer repeated announcements, and reading under the mouse pointer.
+Version 1.0 fixes the focus problem and adds the navigation commands. Planned next: message reading, playing voice messages, fewer repeated announcements, and reading under the mouse pointer.
 
 ## Focus diagnostics add-on
 
