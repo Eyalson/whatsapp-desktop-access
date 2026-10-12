@@ -29,6 +29,11 @@ Navigation
 Alt+1, Alt+2 and Alt+D move the focus to the chat list, the message list and the message
 field. The targets are found by role and state, never by CSS class names or child indices,
 so they keep working when WhatsApp changes its page markup and in every UI language.
+
+Speed: creating an NVDA object costs several milliseconds when many add-ons are installed,
+so walking the page takes about a second. The first command walks the page and remembers
+what it found; later commands check that the remembered object is still alive and use it
+directly. Finding the newest message needs only a few "last child" steps.
 """
 
 import ctypes
@@ -74,8 +79,8 @@ _SILENT_RETURN_SECONDS = 1.0
 #: Limits for one search of the page, so a very large chat can never freeze NVDA.
 _SEARCH_MAX_NODES = 4000
 _SEARCH_MAX_SECONDS = 3.0
-#: How many chat rows are inspected when looking for the open chat.
-_SEARCH_MAX_CHAT_ROWS = 60
+#: How far down the "first child" or "last child" chain the quick paths follow.
+_QUICK_MAX_DEPTH = 4
 
 _user32 = ctypes.windll.user32
 _ENUM_WINDOWS_PROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -91,6 +96,23 @@ class _GuardState:
 	pageWindow = 0
 	silentTarget = None
 	silentUntil = 0.0
+
+
+class _NavCache:
+	"""Navigation targets remembered between commands. Every use is validated first."""
+
+	composer = None
+	chatTable = None
+	lastChatCell = None
+	#: Containers to follow "last child" steps from to reach the newest message row.
+	messageContainers = ()
+
+	@classmethod
+	def reset(cls):
+		cls.composer = None
+		cls.chatTable = None
+		cls.lastChatCell = None
+		cls.messageContainers = ()
 
 
 def _isEditableField(obj) -> bool:
@@ -129,10 +151,17 @@ def _searchPageWindow() -> int:
 	return found[0] if found else 0
 
 
+def _setPageWindow(hwnd: int) -> None:
+	if hwnd != _GuardState.pageWindow:
+		# A different page (WhatsApp was restarted): nothing remembered can be trusted.
+		_NavCache.reset()
+	_GuardState.pageWindow = hwnd
+
+
 def _pageWindow() -> int:
 	if _GuardState.pageWindow and _user32.IsWindow(_GuardState.pageWindow):
 		return _GuardState.pageWindow
-	_GuardState.pageWindow = _searchPageWindow()
+	_setPageWindow(_searchPageWindow())
 	return _GuardState.pageWindow
 
 
@@ -195,31 +224,62 @@ def _safeChildren(obj):
 		return []
 
 
+def _safeFirstChild(obj):
+	try:
+		return obj.firstChild
+	except Exception:
+		return None
+
+
+def _safeLastChild(obj):
+	try:
+		return obj.lastChild
+	except Exception:
+		return None
+
+
+def _safeParent(obj):
+	try:
+		return obj.parent
+	except Exception:
+		return None
+
+
 class NavigationTargets:
-	"""What one walk of the page found. Every attribute is None when it was not found."""
+	"""What one walk of the page found. Every attribute is None or empty when not found."""
 
 	def __init__(self):
+		self.chatTable = None
 		self.chatCell = None
 		self.messageRow = None
+		self.messageContainers = ()
 		self.composer = None
 		self.visited = 0
 		self.timedOut = False
 
 
-def _firstChatCell(table):
-	"""The cell of the open chat in the chat list, or else the first cell."""
-	first = None
-	for rowIndex, row in enumerate(_safeChildren(table)):
-		if rowIndex >= _SEARCH_MAX_CHAT_ROWS:
-			break
-		for cell in _safeChildren(row):
-			if _safeRole(cell) != controlTypes.Role.TABLECELL:
-				continue
-			if first is None:
-				first = cell
-			if controlTypes.State.SELECTED in _safeStates(cell):
-				return cell
-	return first
+def _quickFirstCell(table):
+	"""The first cell of a table, reached through first-child steps only."""
+	node = table
+	for _ in range(_QUICK_MAX_DEPTH):
+		node = _safeFirstChild(node)
+		if node is None:
+			return None
+		if _safeRole(node) == controlTypes.Role.TABLECELL:
+			return node
+	return None
+
+
+def _newestRowIn(container):
+	"""The newest message row below container, reached through last-child steps only."""
+	node = container
+	for _ in range(_QUICK_MAX_DEPTH):
+		node = _safeLastChild(node)
+		if node is None:
+			return None
+		if _safeRole(node) == controlTypes.Role.TABLEROW:
+			return node
+	return None
 
 
 def _messageTarget(row):
@@ -230,39 +290,41 @@ def _messageTarget(row):
 	return row
 
 
-def findNavigationTargets(root, clock=time.monotonic) -> NavigationTargets:
-	"""Walk the page once, breadth first, and pick the three navigation targets.
+def findNavigationTargets(root, want=None, clock=time.monotonic) -> NavigationTargets:
+	"""Walk the page once, breadth first, and pick the navigation targets.
 
-	- Chat list: the first table; its open (selected) chat, or else its first cell.
-	  The walk never goes inside it.
+	- Chat list: the first table. Its first cell is the target; the walk never goes
+	  inside the table.
 	- Message field: an edit field that is multiline or inside a landmark (the footer),
 	  preferring one that is both. The single-line search box is neither.
 	- Messages: table rows outside any table. The newest message is the last one in
 	  document order that comes before the message field. The walk never goes inside rows.
 
-	A node's position is the tuple of child indices from the root, so comparing positions
-	compares document order without asking for any geometry.
+	want is a set of "chatCell", "messageRow" and "composer"; the walk stops as soon as a
+	single wanted target is certain. A node's position is the tuple of child indices from
+	the root, so comparing positions compares document order without asking for geometry.
 	"""
 	targets = NavigationTargets()
 	deadline = clock() + _SEARCH_MAX_SECONDS
-	queue = deque([(root, False, ())])
+	queue = deque([(root, False, (), None)])
 	rows = []
 	fields = []
 	while queue:
 		if targets.visited >= _SEARCH_MAX_NODES or clock() > deadline:
 			targets.timedOut = True
 			break
-		node, inLandmark, position = queue.popleft()
+		node, inLandmark, position, parentNode = queue.popleft()
 		targets.visited += 1
 		for index, child in enumerate(_safeChildren(node)):
 			role = _safeRole(child)
 			childPosition = position + (index,)
 			if role == controlTypes.Role.TABLE:
-				if targets.chatCell is None:
-					targets.chatCell = _firstChatCell(child)
+				if targets.chatTable is None:
+					targets.chatTable = child
+					targets.chatCell = _quickFirstCell(child)
 				continue
 			if role == controlTypes.Role.TABLEROW:
-				rows.append((childPosition, child))
+				rows.append((childPosition, child, node, parentNode))
 				continue
 			if role == controlTypes.Role.EDITABLETEXT:
 				states = _safeStates(child)
@@ -270,7 +332,12 @@ def findNavigationTargets(root, clock=time.monotonic) -> NavigationTargets:
 				# A single-line field outside a landmark is the search box, not the message field.
 				if controlTypes.State.READONLY not in states and (inLandmark or multiline):
 					fields.append((inLandmark, multiline, childPosition, child))
-			queue.append((child, inLandmark or role == controlTypes.Role.LANDMARK, childPosition))
+			queue.append((child, inLandmark or role == controlTypes.Role.LANDMARK, childPosition, node))
+		if want is not None and len(want) == 1:
+			if "chatCell" in want and targets.chatCell is not None:
+				break
+			if "composer" in want and any(f[0] and f[1] for f in fields):
+				break
 	composerPosition = None
 	if fields:
 		best = max(fields, key=lambda f: (f[0], f[1]))
@@ -281,7 +348,11 @@ def findNavigationTargets(root, clock=time.monotonic) -> NavigationTargets:
 			candidates = [r for r in rows if r[0] < composerPosition] or rows
 		else:
 			candidates = rows
-		targets.messageRow = max(candidates, key=lambda r: r[0])[1]
+		newest = max(candidates, key=lambda r: r[0])
+		targets.messageRow = newest[1]
+		# Rows sit in groups of messages: remember both levels above the row, so a later
+		# message in a new group is still reached from the higher one.
+		targets.messageContainers = tuple(c for c in (newest[3], newest[2]) if c is not None)
 	return targets
 
 
@@ -316,6 +387,33 @@ class HostPane(NVDAObject):
 		return target
 
 
+def _cachedTarget(which):
+	"""A remembered target that is still alive, or None. Cheap: a few object calls."""
+	if which == "composer":
+		field = _NavCache.composer
+		if (
+			field is not None
+			and _safeRole(field) == controlTypes.Role.EDITABLETEXT
+			and controlTypes.State.READONLY not in _safeStates(field)
+		):
+			return field
+	elif which == "chatCell":
+		cell = _NavCache.lastChatCell
+		if cell is not None and _safeRole(cell) == controlTypes.Role.TABLECELL:
+			return cell
+		table = _NavCache.chatTable
+		if table is not None and _safeRole(table) == controlTypes.Role.TABLE:
+			return _quickFirstCell(table)
+	elif which == "messageRow":
+		for container in _NavCache.messageContainers:
+			if _safeRole(container) is None:
+				continue
+			row = _newestRowIn(container)
+			if row is not None:
+				return _messageTarget(row)
+	return None
+
+
 class AppModule(_BaseAppModule):
 	# Translators: The category under which this add-on's commands appear in Input Gestures.
 	scriptCategory = _("WhatsApp Desktop Access")
@@ -334,7 +432,8 @@ class AppModule(_BaseAppModule):
 	def event_gainFocus(self, obj, nextHandler):
 		try:
 			if obj.windowClassName == _PAGE_WINDOW_CLASS:
-				_GuardState.pageWindow = obj.windowHandle
+				_setPageWindow(obj.windowHandle)
+				self._rememberFocus(obj)
 		except Exception:
 			pass
 		if _takeSilentReturn(obj):
@@ -346,37 +445,76 @@ class AppModule(_BaseAppModule):
 			return
 		nextHandler()
 
+	def _rememberFocus(self, obj):
+		"""Remember where the user is, so Alt+1 and Alt+D return there without a search."""
+		role = _safeRole(obj)
+		states = _safeStates(obj)
+		if role == controlTypes.Role.TABLECELL and _NavCache.chatTable is not None:
+			row = _safeParent(obj)
+			table = _safeParent(row) if row is not None else None
+			if table is not None and table == _NavCache.chatTable:
+				_NavCache.lastChatCell = obj
+		elif (
+			role == controlTypes.Role.EDITABLETEXT
+			and controlTypes.State.MULTILINE in states
+			and controlTypes.State.READONLY not in states
+			and any(_safeRole(a) == controlTypes.Role.LANDMARK for a in api.getFocusAncestors())
+		):
+			_NavCache.composer = obj
+
 	# Navigation commands --------------------------------------------------------------
 
 	def _moveTo(self, which, notFoundMessage):
 		started = time.monotonic()
-		document = _pageDocument()
-		targets = findNavigationTargets(document) if document is not None else NavigationTargets()
-		picked = {
-			"chatCell": targets.chatCell,
-			"messageRow": targets.messageRow,
-			"composer": targets.composer,
-		}[which]
-		if picked is not None and which == "messageRow":
-			picked = _messageTarget(picked)
+		picked = _cachedTarget(which)
+		cached = picked is not None
+		visited = 0
+		timedOut = False
+		if picked is not None:
+			try:
+				picked.setFocus()
+			except Exception:
+				log.debugWarning("%s remembered target is gone" % _NAV_LOG_TAG, exc_info=True)
+				picked = None
+				cached = False
+		if picked is None:
+			document = _pageDocument()
+			if document is not None:
+				targets = findNavigationTargets(document, want={which})
+				visited = targets.visited
+				timedOut = targets.timedOut
+				if targets.chatTable is not None:
+					_NavCache.chatTable = targets.chatTable
+				if targets.composer is not None:
+					_NavCache.composer = targets.composer
+				if targets.messageContainers:
+					_NavCache.messageContainers = targets.messageContainers
+				picked = {
+					"chatCell": targets.chatCell,
+					"messageRow": _messageTarget(targets.messageRow) if targets.messageRow else None,
+					"composer": targets.composer,
+				}[which]
+			if picked is not None:
+				if which == "chatCell":
+					_NavCache.lastChatCell = picked
+				try:
+					picked.setFocus()
+				except Exception:
+					log.debugWarning("%s could not set focus" % _NAV_LOG_TAG, exc_info=True)
+					picked = None
 		log.info(
-			"%s %s found=%s visited=%d timedOut=%s %.2fs"
+			"%s %s found=%s cached=%s visited=%d timedOut=%s %.2fs"
 			% (
 				_NAV_LOG_TAG,
 				which,
 				picked is not None,
-				targets.visited,
-				targets.timedOut,
+				cached,
+				visited,
+				timedOut,
 				time.monotonic() - started,
 			),
 		)
 		if picked is None:
-			ui.message(notFoundMessage)
-			return
-		try:
-			picked.setFocus()
-		except Exception:
-			log.debugWarning("%s could not set focus" % _NAV_LOG_TAG, exc_info=True)
 			ui.message(notFoundMessage)
 
 	@script(
