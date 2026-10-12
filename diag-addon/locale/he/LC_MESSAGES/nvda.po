@@ -1,0 +1,24 @@
+# WhatsApp focus diagnostics - Hebrew translation
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: he\n"
+
+msgid "WhatsApp focus diagnostics"
+msgstr "אבחון פוקוס ב-WhatsApp"
+
+msgid "Write a marker line to the log"
+msgstr "כתוב שורת סימון ליומן"
+
+msgid "Marker written"
+msgstr "סימון נכתב"
+
+msgid "Toggle focus diagnostics logging"
+msgstr "הפעל או כבה את רישום אבחון הפוקוס"
+
+msgid "Focus diagnostics on"
+msgstr "אבחון פוקוס פועל"
+
+msgid "Focus diagnostics off"
+msgstr "אבחון פוקוס כבוי"
