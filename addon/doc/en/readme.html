@@ -18,7 +18,7 @@
 <li>Alt+D: move to the message field.</li>
 </ul>
 
-<p>These keys are not used by WhatsApp itself. The commands find their targets by role, so they work in every WhatsApp language and keep working when WhatsApp changes its page markup. If a target is missing, for example when no chat is open, NVDA says so.</p>
+<p>These keys are not used by WhatsApp itself. The commands find their targets by role, so they work in every WhatsApp language and keep working when WhatsApp changes its page markup. If a target is missing, for example when no chat is open, NVDA says so. If the focus is already on the target, NVDA announces it again, so you always hear where you are. WhatsApp often puts the focus in the message field by itself when a chat opens.</p>
 
 <p>You can assign other keys in NVDA's Input Gestures dialog, under "WhatsApp Desktop Access".</p>
 
@@ -36,11 +36,21 @@
 
 <p>The add-on builds on NVDA's own WhatsApp support, which turns browse mode off by default.</p>
 
+<h2>Mouse</h2>
+
+<p>NVDA reads what is under the mouse in WhatsApp: chats, messages and buttons. Over the title bar it says "WhatsApp", and over the window buttons it says Minimize, Maximize or Close.</p>
+
+<p>When the mouse enters a control, such as a button, link, text field, check box, slider, tab or menu item, NVDA announces it the way it announces a focus change: its name, role and state. For example, "Play voice message, button" or "Type a message to …, edit". Then it reads the text under the mouse, if there is any.</p>
+
+<p>Without this add-on, NVDA said "Non Client Input Sink Window" over the title bar and nothing over the rest of the window, because Windows reports the WinUI window parts under the mouse instead of the page.</p>
+
+<p>Mouse tracking must be on in NVDA; NVDA+M turns it on and off. If NVDA's own option "Report role when mouse enters object" is on, NVDA announces the controls itself and the add-on leaves it to NVDA.</p>
+
 <h2>Requirements</h2>
 
 <ul>
 <li>NVDA 2026.1 or later. Tested with NVDA 2026.2.</li>
-<li>WhatsApp Desktop from the Microsoft Store on Windows 11. Tested with version 2.2638.102.0.</li>
+<li>WhatsApp Desktop from the Microsoft Store on Windows 11. Tested with version 2.2639.100.0.</li>
 </ul>
 
 <h2>Other WhatsApp add-ons</h2>
@@ -49,9 +59,19 @@
 
 <h2>Current limits</h2>
 
-<p>Version 1.0 fixes the focus problem and adds the three navigation commands. Reading messages, playing voice messages and reducing repeated announcements are planned for later versions.</p>
+<p>Version 1.1 fixes the focus problem, reads what is under the mouse and adds the three navigation commands. Reading whole messages, message actions such as playing a voice message from the keyboard, and reducing repeated announcements are planned for later versions.</p>
 
 <h2>Changes</h2>
+
+<h3>Version 1.1.0</h3>
+
+<ul>
+<li>NVDA now reads what is under the mouse in WhatsApp: chats, messages and buttons, "WhatsApp" over the title bar, and Minimize, Maximize or Close over the window buttons. Before, it said "Non Client Input Sink Window" over the title bar and nothing over the rest of the window.</li>
+<li>Controls are announced like a focus change when the mouse enters them, for example "Play voice message, button". Before, buttons that show only an icon and empty text fields said nothing.</li>
+<li>Alt+1, Alt+2 and Alt+D announce the target when the focus is already on it. Before, they said nothing.</li>
+<li>Alt+1 finds the first chat even when the chat list does not start with a chat.</li>
+<li>Tested with WhatsApp 2.2639.100.0.</li>
+</ul>
 
 <h3>Version 1.0.1</h3>
 

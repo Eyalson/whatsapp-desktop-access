@@ -12,7 +12,15 @@ An NVDA add-on that improves the accessibility of WhatsApp Desktop for Windows: 
 | Alt+2 | Move to the message list: the newest message |
 | Alt+D | Move to the message field |
 
-These keys are not used by WhatsApp itself. The targets are found by role and state, never by CSS class names, so the commands work in every WhatsApp language and survive page changes. If a target is missing, for example when no chat is open, NVDA says so. Other keys can be assigned in NVDA's Input Gestures dialog, under "WhatsApp Desktop Access".
+These keys are not used by WhatsApp itself. The targets are found by role and state, never by CSS class names, so the commands work in every WhatsApp language and survive page changes. If a target is missing, for example when no chat is open, NVDA says so. If the focus is already on the target, NVDA announces it again (WhatsApp often puts the focus in the message field by itself when a chat opens). Other keys can be assigned in NVDA's Input Gestures dialog, under "WhatsApp Desktop Access".
+
+### Mouse
+
+NVDA reads what is under the mouse: chats, messages and buttons in the page, "WhatsApp" over the title bar, and Minimize, Maximize or Close over the window buttons.
+
+When the mouse enters a control (a button, link, text field, check box, slider, tab or menu item), NVDA announces it the way it announces a focus change, for example "Play voice message, button" or "Type a message to …, edit", and then reads the text under the mouse, if there is any.
+
+Why it was needed: WebView2's own window lies at the bottom of the window order, so Windows reports WinUI's windows under the mouse instead of the page: a transparent title bar window named "Non Client Input Sink Window", and the nameless pane that hosts the page. The add-on uses NVDA's `objectFromPointRedirect` to hit-test the page itself. Chromium answers a hit test at a new point with the page and finds the element in the background, so NVDA checks once more after 50 ms. The work runs only while the mouse moves over WhatsApp.
 
 ### Keeping the focus on the message field
 
@@ -32,7 +40,7 @@ Background: [nvaccess/nvda#19772](https://github.com/nvaccess/nvda/issues/19772)
 ## Requirements
 
 - NVDA 2026.1 or later. Tested with NVDA 2026.2.
-- WhatsApp Desktop from the Microsoft Store on Windows 11. Tested with version 2.2638.102.0.
+- WhatsApp Desktop from the Microsoft Store on Windows 11. Tested with version 2.2639.100.0.
 
 ## Installation
 
@@ -44,8 +52,7 @@ NVDA loads only one WhatsApp app module. If you have another WhatsApp add-on tha
 
 The changes of every version are listed in [CHANGELOG.md](CHANGELOG.md).
 
-
-Version 1.0 fixes the focus problem and adds the navigation commands. Planned next: message reading, playing voice messages, fewer repeated announcements, and reading under the mouse pointer.
+Version 1.1 fixes the focus problem, reads what is under the mouse and adds the navigation commands. Planned next: reading whole messages, message actions such as playing a voice message from the keyboard, and fewer repeated announcements.
 
 ## Focus diagnostics add-on
 

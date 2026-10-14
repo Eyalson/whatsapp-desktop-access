@@ -28,7 +28,9 @@ Navigation
 ----------
 Alt+1, Alt+2 and Alt+D move the focus to the chat list, the message list and the message
 field. The targets are found by role and state, never by CSS class names or child indices,
-so they keep working when WhatsApp changes its page markup and in every UI language.
+so they keep working when WhatsApp changes its page markup and in every UI language. When
+the focus is already on the target (WhatsApp puts it in the message field when a chat
+opens), the target is announced anyway, as a focus change would.
 
 Speed: creating an NVDA object costs several milliseconds when many add-ons are installed,
 so walking the page takes about a second. The first command walks the page and remembers
@@ -48,6 +50,11 @@ Both now send NVDA to what is really under the mouse: the page element, the wind
 or the caption button. Chromium answers a hit test at a new point with the page itself and
 finds the real element in the background, so in that case NVDA asks again a moment later.
 This work runs only when the mouse moves over WhatsApp, never on focus changes or typing.
+
+NVDA reads only the text under the mouse, which leaves icon buttons (such as "Play voice
+message") and empty text fields silent. Controls in the page are therefore announced like
+a focus change when the mouse enters them. When the hit test returns the paragraph inside
+the message field or the icon inside a button, the control one or two levels up is used.
 """
 
 import ctypes
@@ -56,6 +63,8 @@ from ctypes import wintypes
 import time
 
 from comtypes import COMError
+from comInterfaces import Accessibility as IA
+from comInterfaces import IAccessible2Lib as IA2
 
 import addonHandler
 import api
@@ -65,13 +74,17 @@ import config
 import controlTypes
 import core
 import IAccessibleHandler
+import locationHelper
 import mouseHandler
 import oleacc
+import speech
+import textInfos
+import textUtils
 import ui
 import vision
 import winUser
 from logHandler import log
-from NVDAObjects import NVDAObject
+from NVDAObjects import NVDAObject, NVDAObjectTextInfo
 from NVDAObjects.IAccessible import IAccessible, getNVDAObjectFromEvent
 from scriptHandler import script
 
@@ -99,6 +112,30 @@ _CAPTION_BUTTONS_CLASS = "ReunionWindowingCaptionControls"
 _HOVER_RECHECK_MS = 50
 #: Hit tests normally reach the element in one step; this only stops a misbehaving page.
 _HIT_TEST_MAX_STEPS = 8
+#: Page elements that are announced like a focus change when the mouse enters them.
+_CONTROL_ROLES = frozenset(
+	(
+		oleacc.ROLE_SYSTEM_PUSHBUTTON,
+		oleacc.ROLE_SYSTEM_BUTTONMENU,
+		oleacc.ROLE_SYSTEM_BUTTONDROPDOWN,
+		oleacc.ROLE_SYSTEM_BUTTONDROPDOWNGRID,
+		oleacc.ROLE_SYSTEM_SPLITBUTTON,
+		oleacc.ROLE_SYSTEM_OUTLINEBUTTON,
+		oleacc.ROLE_SYSTEM_LINK,
+		oleacc.ROLE_SYSTEM_TEXT,
+		oleacc.ROLE_SYSTEM_CHECKBUTTON,
+		oleacc.ROLE_SYSTEM_RADIOBUTTON,
+		oleacc.ROLE_SYSTEM_COMBOBOX,
+		oleacc.ROLE_SYSTEM_SLIDER,
+		oleacc.ROLE_SYSTEM_SPINBUTTON,
+		oleacc.ROLE_SYSTEM_MENUITEM,
+		oleacc.ROLE_SYSTEM_PAGETAB,
+	),
+)
+#: Text and icons, which the hit test returns for the label or icon inside a button or link.
+_CONTROL_CONTENT_ROLES = frozenset((oleacc.ROLE_SYSTEM_GRAPHIC, oleacc.ROLE_SYSTEM_STATICTEXT))
+#: How many objects the search for a chat list cell may look at when the quick path fails.
+_CELL_SEARCH_MAX_NODES = 60
 #: Window class of the Chromium window that holds the WhatsApp page.
 _PAGE_WINDOW_CLASS = "Chrome_RenderWidgetHostHWND"
 #: Top-level Chromium window class whose title ends with "WhatsApp".
@@ -156,6 +193,8 @@ class _HoverState:
 	lastObject = None
 	#: The mouse position a second check was last scheduled for.
 	recheckPos = None
+	#: The IAccessible of a control while its NVDA object is being made (see HoverControl).
+	controlBeingMade = None
 
 
 def _isEditableField(obj) -> bool:
@@ -299,6 +338,26 @@ class NavigationTargets:
 		self.composer = None
 		self.visited = 0
 		self.timedOut = False
+		#: How many children of each role the walk saw; logged when a target is missing.
+		self.roleCounts = {}
+
+
+def _firstCell(table):
+	"""The first cell of the chat list: first-child steps, or a short search inside it."""
+	cell = _quickFirstCell(table)
+	if cell is not None:
+		return cell
+	queue = deque([table])
+	visited = 0
+	while queue and visited < _CELL_SEARCH_MAX_NODES:
+		node = queue.popleft()
+		visited += 1
+		for child in _safeChildren(node):
+			if _safeRole(child) == controlTypes.Role.TABLECELL:
+				log.info("%s first chat found by a search inside the list (%d objects)" % (_NAV_LOG_TAG, visited))
+				return child
+			queue.append(child)
+	return None
 
 
 def _quickFirstCell(table):
@@ -360,11 +419,12 @@ def findNavigationTargets(root, want=None, clock=time.monotonic) -> NavigationTa
 		targets.visited += 1
 		for index, child in enumerate(_safeChildren(node)):
 			role = _safeRole(child)
+			targets.roleCounts[role] = targets.roleCounts.get(role, 0) + 1
 			childPosition = position + (index,)
 			if role == controlTypes.Role.TABLE:
 				if targets.chatTable is None:
 					targets.chatTable = child
-					targets.chatCell = _quickFirstCell(child)
+					targets.chatCell = _firstCell(child)
 				continue
 			if role == controlTypes.Role.TABLEROW:
 				rows.append((childPosition, child, node, parentNode))
@@ -497,6 +557,61 @@ def _pageHitTest(x, y):
 	return acc, childID, reachedElement
 
 
+def _isEditable(acc) -> bool:
+	try:
+		return bool(acc.states & IA2.IA2_STATE_EDITABLE)
+	except Exception:
+		# Not IAccessible2, or the element is gone.
+		return False
+
+
+def _controlFor(acc, childID):
+	"""The control the element at the mouse belongs to, or None.
+
+	Runs for every new element under the mouse, so it uses plain MSAA calls (far cheaper than
+	NVDA objects) and climbs only where a control can be:
+	- text or an icon sits directly inside its button or link: one level up;
+	- inside an editable field such as the message field, the hit test returns the paragraph
+	  (one level below the field) or the text in it (two levels below).
+	"""
+	if childID != 0:
+		return None
+	try:
+		role = acc.accRole(0)
+	except COMError:
+		return None
+	if role in _CONTROL_ROLES:
+		return acc
+	if role in _CONTROL_CONTENT_ROLES:
+		levels = 2 if _isEditable(acc) else 1
+	elif role == oleacc.ROLE_SYSTEM_GROUPING and _isEditable(acc):
+		levels = 1
+	else:
+		return None
+	node = acc
+	for _ in range(levels):
+		try:
+			node = node.accParent.QueryInterface(IA.IAccessible)
+			role = node.accRole(0)
+		except (COMError, AttributeError):
+			return None
+		if role in _CONTROL_ROLES:
+			return IAccessibleHandler.normalizeIAccessible(node)
+	return None
+
+
+def _makePageObject(acc, childID):
+	control = _controlFor(acc, childID)
+	if control is None:
+		return IAccessible(IAccessibleObject=acc, IAccessibleChildID=childID)
+	# Tells chooseNVDAObjectOverlayClasses to add HoverControl to exactly this object.
+	_HoverState.controlBeingMade = control
+	try:
+		return IAccessible(IAccessibleObject=control, IAccessibleChildID=0)
+	finally:
+		_HoverState.controlBeingMade = None
+
+
 def _pageElementAt(x, y):
 	"""The NVDA object for the page element at the point, or None."""
 	started = time.perf_counter()
@@ -508,14 +623,72 @@ def _pageElementAt(x, y):
 		if _askAgainSoon():
 			_logMouse("page not ready, asking again", started)
 		return None
+	# Keyed by what the hit test returned, so moving within it skips the control search too.
 	elementID = _elementID(acc) if childID == 0 else None
 	key = ("page", _HoverState.pageWindow, elementID) if elementID is not None else None
-	element, isNew = _reuseOrMake(key, lambda: IAccessible(IAccessibleObject=acc, IAccessibleChildID=childID))
+	element, isNew = _reuseOrMake(key, lambda: _makePageObject(acc, childID))
 	if isNew:
 		# The first answer for a new element can still be a larger container: ask once more.
 		_askAgainSoon()
-		_logMouse("page element %s" % _roleName(element), started)
+		_logMouse(
+			"page %s %s" % ("control" if isinstance(element, HoverControl) else "element", _roleName(element)),
+			started,
+		)
 	return element
+
+
+def _isReadable(text) -> bool:
+	"""Whether text has something to say: NVDA's own test for text under the mouse."""
+	return any(not ch.isspace() and ch != textUtils.OBJ_REPLACEMENT_CHAR for ch in text or "")
+
+
+class HoverControl(NVDAObject):
+	"""A control in the page that the mouse entered: a button, link, text field, slider and so on.
+
+	NVDA reads only the text under the mouse, so a button that shows an icon (such as "Play
+	voice message") and an empty text field said nothing at all. On entering, this says the
+	control like a focus change (name, role, states and value), then the text under the mouse
+	when it adds something. Inside the control, NVDA's own handling continues unchanged.
+	"""
+
+	def event_mouseMove(self, x, y):
+		if self._mouseEntered or config.conf["mouse"]["reportObjectRoleOnMouseEnter"]:
+			# Already inside, or NVDA's own option already reports controls on entering.
+			super().event_mouseMove(x, y)
+			return
+		text = self._readTextUnderMouse(x, y)
+		speech.cancelSpeech()
+		editable = (
+			_safeRole(self) == controlTypes.Role.EDITABLETEXT
+			or controlTypes.State.EDITABLE in _safeStates(self)
+		)
+		speech.speakObjectProperties(
+			self,
+			reason=controlTypes.OutputReason.FOCUS,
+			name=True,
+			role=True,
+			states=True,
+			# The value of a text field is all of its text; the part under the mouse follows.
+			value=not editable,
+			description=config.conf["presentation"]["reportObjectDescriptions"],
+		)
+		if _isReadable(text) and text.strip() != (self.name or "").strip():
+			speech.speakText(text)
+		# NVDA's own handling updates braille, vision and the review cursor. It finds the text
+		# under the mouse already read, so it says nothing more.
+		super().event_mouseMove(x, y)
+
+	def _readTextUnderMouse(self, x, y):
+		"""The text NVDA would read under the mouse, remembered as already read (or None)."""
+		try:
+			info = self.makeTextInfo(locationHelper.Point(x, y))
+		except NotImplementedError:
+			info = NVDAObjectTextInfo(self, textInfos.POSITION_FIRST)
+		except LookupError:
+			return None
+		info.expand(info.unit_mouseChunk)
+		self._lastMouseTextInfoObject = info
+		return info.text
 
 
 def _askAgainSoon() -> bool:
@@ -672,7 +845,7 @@ def _cachedTarget(which):
 			row = _safeParent(cell)
 			if row is not None and _safeParent(row) == table:
 				return cell
-		return _quickFirstCell(table)
+		return _firstCell(table)
 	elif which == "messageRow":
 		for container in _NavCache.messageContainers:
 			if _safeRole(container) is None:
@@ -700,6 +873,9 @@ class AppModule(_BaseAppModule):
 		elif windowClass == _TITLE_BAR_INPUT_CLASS:
 			clsList.insert(0, TitleBarInput)
 		elif windowClass == _PAGE_WINDOW_CLASS and isinstance(obj, IAccessible):
+			beingMade = _HoverState.controlBeingMade
+			if beingMade is not None and obj.IAccessibleObject is beingMade:
+				clsList.insert(0, HoverControl)
 			try:
 				isMenuPopup = obj.IAccessibleRole == oleacc.ROLE_SYSTEM_MENUPOPUP
 			except Exception:
@@ -745,17 +921,29 @@ class AppModule(_BaseAppModule):
 
 	# Navigation commands --------------------------------------------------------------
 
+	@staticmethod
+	def _focus(target):
+		"""Move the focus to target. Returns (moved, alreadyThere), or (False, False) on failure."""
+		alreadyThere = target == api.getFocusObject()
+		try:
+			target.setFocus()
+		except Exception:
+			log.debugWarning("%s could not set focus" % _NAV_LOG_TAG, exc_info=True)
+			return False, False
+		return True, alreadyThere
+
 	def _moveTo(self, which, notFoundMessage):
 		started = time.monotonic()
 		picked = _cachedTarget(which)
 		cached = picked is not None
 		visited = 0
 		timedOut = False
+		alreadyThere = False
+		targets = None
 		if picked is not None:
-			try:
-				picked.setFocus()
-			except Exception:
-				log.debugWarning("%s remembered target is gone" % _NAV_LOG_TAG, exc_info=True)
+			moved, alreadyThere = self._focus(picked)
+			if not moved:
+				# The remembered target is gone; search the page instead.
 				picked = None
 				cached = False
 		if picked is None:
@@ -778,25 +966,40 @@ class AppModule(_BaseAppModule):
 			if picked is not None:
 				if which == "chatCell":
 					_NavCache.lastChatCell = picked
-				try:
-					picked.setFocus()
-				except Exception:
-					log.debugWarning("%s could not set focus" % _NAV_LOG_TAG, exc_info=True)
+				moved, alreadyThere = self._focus(picked)
+				if not moved:
 					picked = None
 		log.info(
-			"%s %s found=%s cached=%s visited=%d timedOut=%s %.2fs"
+			"%s %s found=%s cached=%s alreadyThere=%s visited=%d timedOut=%s %.2fs"
 			% (
 				_NAV_LOG_TAG,
 				which,
 				picked is not None,
 				cached,
+				alreadyThere,
 				visited,
 				timedOut,
 				time.monotonic() - started,
 			),
 		)
 		if picked is None:
+			if targets is not None:
+				# Only roles and counts, never names: enough to see what the page looked like.
+				seen = sorted(targets.roleCounts.items(), key=lambda item: -item[1])
+				log.info(
+					"%s %s not found: chat list %s, roles seen: %s"
+					% (
+						_NAV_LOG_TAG,
+						which,
+						"found" if targets.chatTable is not None else "missing",
+						", ".join("%s=%d" % (getattr(role, "name", role), count) for role, count in seen),
+					),
+				)
 			ui.message(notFoundMessage)
+		elif alreadyThere:
+			# The focus does not move, so NVDA would say nothing: announce the target the way a
+			# focus change would.
+			speech.speakObject(picked, reason=controlTypes.OutputReason.FOCUS)
 
 	@script(
 		# Translators: Description of a command that moves the focus to the chat list.
