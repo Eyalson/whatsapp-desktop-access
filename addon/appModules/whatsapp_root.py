@@ -34,6 +34,20 @@ Speed: creating an NVDA object costs several milliseconds when many add-ons are 
 so walking the page takes about a second. The first command walks the page and remembers
 what it found; later commands check that the remembered object is still alive and use it
 directly. Finding the newest message needs only a few "last child" steps.
+
+Mouse
+-----
+The page is drawn inside the WinUI window, but its own window lies at the bottom of the
+window order, so Windows never reports it under the mouse. Instead NVDA finds:
+
+- over the title bar, a transparent WinUI window named "Non Client Input Sink Window",
+  which also covers the Minimize, Maximize and Close buttons;
+- everywhere else, the pane that hosts the page, which has no name, so NVDA says nothing.
+
+Both now send NVDA to what is really under the mouse: the page element, the window title,
+or the caption button. Chromium answers a hit test at a new point with the page itself and
+finds the real element in the background, so in that case NVDA asks again a moment later.
+This work runs only when the mouse moves over WhatsApp, never on focus changes or typing.
 """
 
 import ctypes
@@ -41,11 +55,17 @@ from collections import deque
 from ctypes import wintypes
 import time
 
+from comtypes import COMError
+
 import addonHandler
 import api
 import appModuleHandler
 import braille
+import config
 import controlTypes
+import core
+import IAccessibleHandler
+import mouseHandler
 import oleacc
 import ui
 import vision
@@ -68,8 +88,17 @@ addonHandler.initTranslation()
 
 _LOG_TAG = "WA-GUARD"
 _NAV_LOG_TAG = "WA-NAV"
+_MOUSE_LOG_TAG = "WA-MOUSE"
 #: Window class of the WinUI pane that hosts the WebView2.
 _HOST_PANE_CLASS = "Microsoft.UI.Content.DesktopChildSiteBridge"
+#: Window class of the transparent WinUI window that takes the mouse over the title bar.
+_TITLE_BAR_INPUT_CLASS = "InputNonClientPointerSource"
+#: Window class of the WinUI window that holds the Minimize, Maximize and Close buttons.
+_CAPTION_BUTTONS_CLASS = "ReunionWindowingCaptionControls"
+#: How long to wait before asking the page again when it answered with the page itself, in ms.
+_HOVER_RECHECK_MS = 50
+#: Hit tests normally reach the element in one step; this only stops a misbehaving page.
+_HIT_TEST_MAX_STEPS = 8
 #: Window class of the Chromium window that holds the WhatsApp page.
 _PAGE_WINDOW_CLASS = "Chrome_RenderWidgetHostHWND"
 #: Top-level Chromium window class whose title ends with "WhatsApp".
@@ -114,6 +143,19 @@ class _NavCache:
 		cls.chatTable = None
 		cls.lastChatCell = None
 		cls.messageContainers = ()
+
+
+class _HoverState:
+	"""What the mouse was last found on, so moving within one element creates no new object."""
+
+	pageWindow = 0
+	#: (IAccessible, child ID) of the page document in pageWindow.
+	pageRoot = None
+	#: What the last returned object stands for, such as ("page", window, element ID).
+	lastKey = None
+	lastObject = None
+	#: The mouse position a second check was last scheduled for.
+	recheckPos = None
 
 
 def _isEditableField(obj) -> bool:
@@ -357,6 +399,218 @@ def findNavigationTargets(root, want=None, clock=time.monotonic) -> NavigationTa
 	return targets
 
 
+# Mouse --------------------------------------------------------------------------------
+
+
+def _logMouse(message, started):
+	# Written only when NVDA logs at the input/output level, so normal use adds nothing.
+	if log.isEnabledFor(log.IO):
+		log.io("%s %s %.1fms" % (_MOUSE_LOG_TAG, message, (time.perf_counter() - started) * 1000))
+
+
+def _roleName(obj):
+	role = _safeRole(obj)
+	return getattr(role, "name", role)
+
+
+def _containsPoint(rect, x, y) -> bool:
+	return rect.left <= x < rect.right and rect.top <= y < rect.bottom
+
+
+def _windowRect(hwnd):
+	rect = wintypes.RECT()
+	if not _user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+		return None
+	return rect
+
+
+def _elementID(acc):
+	try:
+		return acc.uniqueID
+	except Exception:
+		# Not IAccessible2, or the element is gone.
+		return None
+
+
+def _reuseOrMake(key, make):
+	"""The object for key: the one returned last time if NVDA still has it under the mouse.
+
+	Moving within one element then creates no new object. An object is reused only while
+	it is NVDA's mouse object, because NVDA remembers on it what it last read there and
+	would stay silent when the mouse comes back to it later.
+	"""
+	last = _HoverState.lastObject
+	if key is not None and key == _HoverState.lastKey and last is not None:
+		mouseObject = api.getMouseObject()
+		# NVDA keeps its own instance when a new one compares equal, so hand that one back.
+		if mouseObject is not None and (mouseObject is last or mouseObject == last):
+			_HoverState.lastObject = mouseObject
+			return mouseObject, False
+	obj = make()
+	_HoverState.lastKey = key
+	_HoverState.lastObject = obj
+	return obj, True
+
+
+def _pageHitTest(x, y):
+	"""Ask the WhatsApp page which element is at the point.
+
+	Returns (IAccessible, child ID, reachedElement), or None when the point is outside the
+	page or the page cannot be asked. reachedElement is False when the page answered with
+	itself: Chromium does that for a point it has not looked up yet, and finds the element
+	in the background for the next question.
+	"""
+	hwnd = _pageWindow()
+	if not hwnd:
+		return None
+	if _HoverState.pageWindow != hwnd or _HoverState.pageRoot is None:
+		root = IAccessibleHandler.accessibleObjectFromEvent(hwnd, winUser.OBJID_CLIENT, 0)
+		if not root:
+			return None
+		_HoverState.pageWindow = hwnd
+		_HoverState.pageRoot = root
+	acc, childID = _HoverState.pageRoot
+	reachedElement = False
+	for _ in range(_HIT_TEST_MAX_STEPS):
+		try:
+			hit = acc.accHitTest(x, y)
+		except COMError:
+			# The page may have been replaced; fetch it again next time.
+			_HoverState.pageRoot = None
+			return None
+		if hit is None:
+			if not reachedElement:
+				# The point is outside the page.
+				return None
+			break
+		if isinstance(hit, int):
+			if hit != 0:
+				childID = hit
+				reachedElement = True
+			break
+		try:
+			acc = IAccessibleHandler.normalizeIAccessible(hit)
+		except (COMError, RuntimeError):
+			return None
+		childID = 0
+		reachedElement = True
+	return acc, childID, reachedElement
+
+
+def _pageElementAt(x, y):
+	"""The NVDA object for the page element at the point, or None."""
+	started = time.perf_counter()
+	hit = _pageHitTest(x, y)
+	if hit is None:
+		return None
+	acc, childID, reachedElement = hit
+	if not reachedElement:
+		if _askAgainSoon():
+			_logMouse("page not ready, asking again", started)
+		return None
+	elementID = _elementID(acc) if childID == 0 else None
+	key = ("page", _HoverState.pageWindow, elementID) if elementID is not None else None
+	element, isNew = _reuseOrMake(key, lambda: IAccessible(IAccessibleObject=acc, IAccessibleChildID=childID))
+	if isNew:
+		# The first answer for a new element can still be a larger container: ask once more.
+		_askAgainSoon()
+		_logMouse("page element %s" % _roleName(element), started)
+	return element
+
+
+def _askAgainSoon() -> bool:
+	"""Run NVDA's mouse handling once more shortly, if the mouse stays where it is.
+
+	Happens at most once per mouse position, so it can never repeat on its own.
+	Returns whether a new check was scheduled.
+	"""
+	try:
+		pos = tuple(winUser.getCursorPos())
+	except Exception:
+		return False
+	if pos == _HoverState.recheckPos:
+		return False
+	_HoverState.recheckPos = pos
+	core.callLater(_HOVER_RECHECK_MS, _recheckMouse, pos)
+	return True
+
+
+def _recheckMouse(pos):
+	if not config.conf["mouse"]["enableMouseTracking"]:
+		return
+	try:
+		if tuple(winUser.getCursorPos()) != pos:
+			# The mouse moved on; NVDA handles the new position itself.
+			return
+		mouseHandler.executeMouseMoveEvent(*pos)
+	except Exception:
+		log.debugWarning("%s second check failed" % _MOUSE_LOG_TAG, exc_info=True)
+
+
+def _captionButtonAt(topWindow, x, y):
+	"""The Minimize, Maximize or Close button at the point, or None."""
+	captionWindow = _user32.FindWindowExW(wintypes.HWND(topWindow), None, _CAPTION_BUTTONS_CLASS, None)
+	if not captionWindow:
+		return None
+	rect = _windowRect(captionWindow)
+	if rect is None or not _containsPoint(rect, x, y):
+		return None
+	import UIAHandler
+
+	handler = UIAHandler.handler
+	if handler is None:
+		return None
+	started = time.perf_counter()
+	try:
+		window = handler.clientObject.ElementFromHandleBuildCache(captionWindow, handler.baseCacheRequest)
+		buttons = window.FindAllBuildCache(
+			UIAHandler.TreeScope_Children,
+			handler.clientObject.CreateTrueCondition(),
+			handler.baseCacheRequest,
+		)
+		for index in range(buttons.Length):
+			button = buttons.GetElement(index)
+			if _containsPoint(button.CurrentBoundingRectangle, x, y):
+				from NVDAObjects.UIA import UIA
+
+				obj, isNew = _reuseOrMake(("caption", captionWindow, index), lambda: UIA(UIAElement=button))
+				if isNew:
+					_logMouse("caption button %d" % index, started)
+				return obj
+	except COMError:
+		log.debugWarning("%s caption buttons not available" % _MOUSE_LOG_TAG, exc_info=True)
+	return None
+
+
+def _titleBarObjectAt(inputWindow, x, y):
+	"""What is under the mouse over the title bar: a caption button, or the window itself."""
+	topWindow = winUser.getAncestor(inputWindow, winUser.GA_ROOT)
+	if not topWindow:
+		return None
+	button = _captionButtonAt(topWindow, x, y)
+	if button is not None:
+		return button
+	started = time.perf_counter()
+	window, isNew = _reuseOrMake(
+		("title", topWindow),
+		lambda: getNVDAObjectFromEvent(topWindow, winUser.OBJID_CLIENT, 0) or None,
+	)
+	if isNew:
+		_logMouse("title bar", started)
+	return window
+
+
+class TitleBarInput(NVDAObject):
+	"""The transparent WinUI window over the title bar, named "Non Client Input Sink Window"."""
+
+	def objectFromPointRedirect(self, x, y):
+		try:
+			return _titleBarObjectAt(self.windowHandle, x, y)
+		except Exception:
+			log.debugWarning("%s title bar redirect failed" % _MOUSE_LOG_TAG, exc_info=True)
+			return None
+
+
 class SelectionPopup(IAccessible):
 	"""A popup with role menu inside the WhatsApp page, such as the one shown next to selected text."""
 
@@ -371,7 +625,17 @@ class SelectionPopup(IAccessible):
 
 
 class HostPane(NVDAObject):
-	"""The WinUI pane that hosts the WebView2. It never has useful focus of its own."""
+	"""The WinUI pane that hosts the WebView2. It never has useful focus of its own.
+
+	It is also what Windows reports under the mouse everywhere below the title bar.
+	"""
+
+	def objectFromPointRedirect(self, x, y):
+		try:
+			return _pageElementAt(x, y)
+		except Exception:
+			log.debugWarning("%s page redirect failed" % _MOUSE_LOG_TAG, exc_info=True)
+			return None
 
 	# Computed once per core cycle; NVDA reads focusRedirect more than once per event.
 	_cache_focusRedirect = True
@@ -433,6 +697,8 @@ class AppModule(_BaseAppModule):
 			windowClass = ""
 		if windowClass == _HOST_PANE_CLASS:
 			clsList.insert(0, HostPane)
+		elif windowClass == _TITLE_BAR_INPUT_CLASS:
+			clsList.insert(0, TitleBarInput)
 		elif windowClass == _PAGE_WINDOW_CLASS and isinstance(obj, IAccessible):
 			try:
 				isMenuPopup = obj.IAccessibleRole == oleacc.ROLE_SYSTEM_MENUPOPUP

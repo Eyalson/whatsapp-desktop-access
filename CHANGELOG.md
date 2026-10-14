@@ -3,6 +3,13 @@
 All notable changes to WhatsApp Desktop Access are listed here, newest first.
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Mouse tracking in WhatsApp. NVDA now reads what is under the mouse: chats, messages and buttons in the page, "WhatsApp" over the title bar, and Minimize, Maximize or Close over the window buttons. Before, NVDA said "Non Client Input Sink Window" over the title bar and nothing over the rest of the window, because Windows reports WinUI's own windows under the mouse instead of the page.
+- The add-on does this work only while the mouse moves over WhatsApp. Typing, focus changes and the navigation commands are not affected.
+
 ## [1.0.1] - 2026-10-12
 
 ### Added
