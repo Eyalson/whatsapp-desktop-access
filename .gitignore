@@ -3,3 +3,8 @@
 *.mo
 __pycache__/
 *.pyc
+
+# Secrets
+.env*
+!.env.example
+*.pem
