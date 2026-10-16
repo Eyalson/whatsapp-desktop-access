@@ -18,7 +18,7 @@
 <li>Alt+D: move to the message field.</li>
 </ul>
 
-<p>These keys are not used by WhatsApp itself. The commands find their targets by role, so they work in every WhatsApp language and keep working when WhatsApp changes its page markup. If a target is missing, for example when no chat is open, NVDA says so. If the focus is already on the target, NVDA announces it again, so you always hear where you are. WhatsApp often puts the focus in the message field by itself when a chat opens.</p>
+<p>These keys are not used by WhatsApp itself. The commands find their targets by role, so they work in every WhatsApp language and keep working when WhatsApp changes its page markup. If a target is missing, for example when no chat is open, NVDA announces this. If the focus is already on the target, NVDA announces it again, so you always hear where you are. WhatsApp often puts the focus in the message field by itself when a chat opens.</p>
 
 <p>You can assign other keys in NVDA's Input Gestures dialog, under "WhatsApp Desktop Access".</p>
 
@@ -38,11 +38,11 @@
 
 <h2>Mouse</h2>
 
-<p>NVDA reads what is under the mouse in WhatsApp: chats, messages and buttons. Over the title bar it says "WhatsApp", and over the window buttons it says Minimize, Maximize or Close.</p>
+<p>NVDA reads what is under the mouse in WhatsApp: chats, messages and buttons. Over the title bar it announces "WhatsApp", and over the window buttons it announces Minimize, Maximize or Close.</p>
 
 <p>When the mouse enters a control, such as a button, link, text field, check box, slider, tab or menu item, NVDA announces it the way it announces a focus change: its name, role and state. For example, "Play voice message, button" or "Type a message to …, edit". Then it reads the text under the mouse, if there is any.</p>
 
-<p>Without this add-on, NVDA said "Non Client Input Sink Window" over the title bar and nothing over the rest of the window, because Windows reports the WinUI window parts under the mouse instead of the page.</p>
+<p>Without this add-on, NVDA announces "Non Client Input Sink Window" over the title bar and says nothing over the rest of the window, because Windows reports the WinUI window parts under the mouse instead of the page.</p>
 
 <p>Mouse tracking must be on in NVDA; NVDA+M turns it on and off. If NVDA's own option "Report role when mouse enters object" is on, NVDA announces the controls itself and the add-on leaves it to NVDA.</p>
 
@@ -55,7 +55,7 @@
 
 <h2>Other WhatsApp add-ons</h2>
 
-<p>NVDA loads only one WhatsApp app module. If another WhatsApp add-on that includes an app module is installed and enabled, such as WhatsApp NG or WhatsApp Desktop Enhancer, disable it while you use this add-on.</p>
+<p>NVDA loads only one WhatsApp app module. If another WhatsApp add-on that includes an app module is installed and enabled, disable it while you use this add-on.</p>
 
 <h2>Current limits</h2>
 
@@ -66,9 +66,9 @@
 <h3>Version 1.1.0</h3>
 
 <ul>
-<li>NVDA now reads what is under the mouse in WhatsApp: chats, messages and buttons, "WhatsApp" over the title bar, and Minimize, Maximize or Close over the window buttons. Before, it said "Non Client Input Sink Window" over the title bar and nothing over the rest of the window.</li>
-<li>Controls are announced like a focus change when the mouse enters them, for example "Play voice message, button". Before, buttons that show only an icon and empty text fields said nothing.</li>
-<li>Alt+1, Alt+2 and Alt+D announce the target when the focus is already on it. Before, they said nothing.</li>
+<li>NVDA now reads what is under the mouse in WhatsApp: chats, messages and buttons, "WhatsApp" over the title bar, and Minimize, Maximize or Close over the window buttons. Without the add-on, it announced "Non Client Input Sink Window" over the title bar and nothing over the rest of the window.</li>
+<li>Controls are announced like a focus change when the mouse enters them, for example "Play voice message, button". Before, buttons that show only an icon and empty text fields were not announced at all.</li>
+<li>Alt+1, Alt+2 and Alt+D announce the target when the focus is already on it. Before, they announced nothing.</li>
 <li>Alt+1 finds the first chat even when the chat list does not start with a chat.</li>
 <li>Tested with WhatsApp 2.2639.100.0.</li>
 </ul>
@@ -81,18 +81,14 @@
 
 <h3>Version 1.0.0</h3>
 
-<p>First version for the NVDA add-on store.</p>
 <ul>
 <li>Added Alt+1, Alt+2 and Alt+D to move to the chat list, the newest message and the message field.</li>
 <li>Each command says so when there is nothing to move to, for example when no chat is open.</li>
 <li>The commands find their targets by role, so they work in every WhatsApp language and keep working when WhatsApp changes its page markup.</li>
-<li>The commands remember what they found, so repeated use is instant. The first Alt+2 in a chat still takes about a second.</li>
-<li>Added a Hebrew translation of the command names and messages.</li>
 </ul>
 
 <h3>Version 0.1.0</h3>
 
-<p>First public version, published on GitHub only.</p>
 <ul>
 <li>NVDA no longer loses the message field after you select and delete text. Before, NVDA announced "menu" and then "pane", and stopped echoing typed characters until you pressed Tab and Shift+Tab to get back into the field.</li>
 </ul>

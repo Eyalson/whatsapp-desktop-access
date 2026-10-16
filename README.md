@@ -12,7 +12,7 @@ An NVDA add-on that improves the accessibility of WhatsApp Desktop for Windows: 
 | Alt+2 | Move to the message list: the newest message |
 | Alt+D | Move to the message field |
 
-These keys are not used by WhatsApp itself. The targets are found by role and state, never by CSS class names, so the commands work in every WhatsApp language and survive page changes. If a target is missing, for example when no chat is open, NVDA says so. If the focus is already on the target, NVDA announces it again (WhatsApp often puts the focus in the message field by itself when a chat opens). Other keys can be assigned in NVDA's Input Gestures dialog, under "WhatsApp Desktop Access".
+These keys are not used by WhatsApp itself. The targets are found by role and state, never by CSS class names, so the commands work in every WhatsApp language and survive page changes. If a target is missing, for example when no chat is open, NVDA announces this. If the focus is already on the target, NVDA announces it again (WhatsApp often puts the focus in the message field by itself when a chat opens). Other keys can be assigned in NVDA's Input Gestures dialog, under "WhatsApp Desktop Access".
 
 ### Mouse
 
@@ -26,7 +26,7 @@ Why it was needed: WebView2's own window lies at the bottom of the window order,
 
 It keeps NVDA on the message field while you type.
 
-Without it, NVDA can lose the message field after you select and delete text. NVDA says "menu", then "pane", and stops echoing typed characters and reporting the caret until you Tab away and back.
+Without it, NVDA can lose the message field after you select and delete text. NVDA announces "menu", then "pane", and stops echoing typed characters and reporting the caret until you Tab away and back.
 
 How the add-on prevents this:
 
@@ -46,7 +46,7 @@ Background: [nvaccess/nvda#19772](https://github.com/nvaccess/nvda/issues/19772)
 
 Download the `.nvda-addon` file from [Releases](https://github.com/Eyalson/whatsapp-desktop-access/releases) and open it. NVDA asks to install it and then to restart.
 
-NVDA loads only one WhatsApp app module. If you have another WhatsApp add-on that includes one, such as WhatsApp NG or WhatsApp Desktop Enhancer, disable it while you use this add-on.
+NVDA loads only one WhatsApp app module. If you have another WhatsApp add-on that includes one, disable it while you use this add-on.
 
 ## Status and plans
 
