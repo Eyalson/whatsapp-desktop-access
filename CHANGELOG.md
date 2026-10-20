@@ -3,6 +3,15 @@
 All notable changes to WhatsApp Desktop Access are listed here, newest first.
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.2] - 2026-10-20
+
+### Performance
+
+- The first Alt+2 in a chat is about four times faster: about 0.3 seconds instead of 1 to 2 seconds on the author's computer. The add-on now searches for the newest message from the end of the page, where the message field and the newest messages are, and stops at the first message it reaches, instead of walking the whole page. Later uses of the command were already immediate.
+- If the quick search cannot be trusted, for example when a page element returns an error, the add-on makes the full search as before, so the command still moves to the newest message.
+
+Tested with WhatsApp 2.2639.100.0 and NVDA 2026.2.
+
 ## [1.1.0] - 2026-10-14
 
 ### Added

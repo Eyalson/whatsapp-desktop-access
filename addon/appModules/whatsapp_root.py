@@ -35,7 +35,9 @@ opens), the target is announced anyway, as a focus change would.
 Speed: creating an NVDA object costs several milliseconds when many add-ons are installed,
 so walking the page takes about a second. The first command walks the page and remembers
 what it found; later commands check that the remembered object is still alive and use it
-directly. Finding the newest message needs only a few "last child" steps.
+directly. Finding the newest message needs only a few "last child" steps. The first time,
+the message list is searched from the end of the page, where the message field and the
+newest messages are, and the search stops at the first message it reaches.
 
 Mouse
 -----
@@ -457,6 +459,73 @@ def findNavigationTargets(root, want=None, clock=time.monotonic) -> NavigationTa
 		# message in a new group is still reached from the higher one.
 		targets.messageContainers = tuple(c for c in (newest[3], newest[2]) if c is not None)
 	return targets
+
+
+def findNewestMessageRow(root, clock=time.monotonic):
+	"""Find the newest message by walking the page from its end to its start.
+
+	The newest message is the last table row (outside any table) that comes before the message
+	field, and the message field sits near the end of the page. So this walk starts at the last
+	object, goes down first and then to the previous sibling, and stops at the first row it meets
+	after it has passed the message field. Objects are made only when the walk reaches them.
+
+	Returns NavigationTargets with messageRow, messageContainers and composer, or None when this
+	walk cannot be trusted: nothing was found, or an object raised an error when its role, its
+	previous sibling or its last child was read. The caller then makes the full search. An error
+	is never skipped, because skipping a subtree could make an older message look like the newest.
+	A page that answers "previous" with None too early without an error is not detected; the
+	walk then ends early and, at worst, finds nothing, which also leads to the full search.
+	A walk that hits its budget is returned with timedOut set, as findNavigationTargets does.
+	"""
+	targets = NavigationTargets()
+	deadline = clock() + _SEARCH_MAX_SECONDS
+	last = _safeLastChild(root)
+	if last is None:
+		return None
+	stack = [(last, _safeRole(root) == controlTypes.Role.LANDMARK)]
+	composerSeen = False
+	while stack:
+		if targets.visited >= _SEARCH_MAX_NODES or clock() > deadline:
+			targets.timedOut = True
+			return targets
+		node, inLandmark = stack.pop()
+		targets.visited += 1
+		try:
+			role = node.role
+			previous = node.previous
+		except Exception:
+			return None
+		targets.roleCounts[role] = targets.roleCounts.get(role, 0) + 1
+		if previous is not None:
+			stack.append((previous, inLandmark))
+		if role == controlTypes.Role.TABLE:
+			continue
+		if role == controlTypes.Role.TABLEROW:
+			if composerSeen:
+				targets.messageRow = node
+				parent = _safeParent(node)
+				grandparent = _safeParent(parent) if parent is not None else None
+				targets.messageContainers = tuple(c for c in (grandparent, parent) if c is not None)
+				return targets
+			continue
+		if role == controlTypes.Role.EDITABLETEXT:
+			states = _safeStates(node)
+			if (
+				not composerSeen
+				and inLandmark
+				and controlTypes.State.MULTILINE in states
+				and controlTypes.State.READONLY not in states
+			):
+				composerSeen = True
+				targets.composer = node
+			continue
+		try:
+			child = node.lastChild
+		except Exception:
+			return None
+		if child is not None:
+			stack.append((child, inLandmark or role == controlTypes.Role.LANDMARK))
+	return None
 
 
 # Mouse --------------------------------------------------------------------------------
@@ -949,7 +1018,9 @@ class AppModule(_BaseAppModule):
 		if picked is None:
 			document = _pageDocument()
 			if document is not None:
-				targets = findNavigationTargets(document, want={which})
+				targets = findNewestMessageRow(document) if which == "messageRow" else None
+				if targets is None:
+					targets = findNavigationTargets(document, want={which})
 				visited = targets.visited
 				timedOut = targets.timedOut
 				if targets.chatTable is not None:
