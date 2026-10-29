@@ -33,26 +33,26 @@ How the add-on prevents this:
 - WhatsApp shows a small popup with role "menu" next to selected text. NVDA used to give it the focus, although the real focus stays in the message field. The add-on ignores that popup while an edit field in the page has focus.
 - When the popup closes, NVDA asked Windows where the focus is and landed on the WinUI pane that hosts the page (`Microsoft.UI.Content.DesktopChildSiteBridge`). The add-on sends that focus back to the element that really has it inside the page. If it is the element NVDA already had, nothing is announced again.
 
-The add-on builds on NVDA's own WhatsApp support, which turns browse mode off by default.
+The add-on works alongside NVDA's own WhatsApp support, which turns browse mode off by default.
 
 Background: [nvaccess/nvda#19772](https://github.com/nvaccess/nvda/issues/19772). The same approach was used in NVDA for Microsoft Teams in [nvaccess/nvda#11822](https://github.com/nvaccess/nvda/pull/11822).
 
 ## Requirements
 
-- NVDA 2026.1 or later. Tested with NVDA 2026.2.
+- NVDA 2026.2 or later. Tested with NVDA 2026.2.
 - WhatsApp Desktop from the Microsoft Store on Windows 11. Tested with version 2.2639.100.0.
 
 ## Installation
 
 Download the `.nvda-addon` file from [Releases](https://github.com/Eyalson/whatsapp-desktop-access/releases) and open it. NVDA asks to install it and then to restart.
 
-NVDA loads only one WhatsApp app module. If you have another WhatsApp add-on that includes one, disable it while you use this add-on.
+This add-on does not include an app module, so it does not replace NVDA's own WhatsApp support or the app module of another WhatsApp add-on, and it can be enabled together with them. If another WhatsApp add-on also uses Alt+1, Alt+2 or Alt+D, the command of that add-on runs for that key.
 
 ## Status and plans
 
 The changes of every version are listed in [CHANGELOG.md](CHANGELOG.md).
 
-Version 1.1 fixes the focus problem, reads what is under the mouse and adds the navigation commands. Planned next: reading whole messages, message actions such as playing a voice message from the keyboard, and fewer repeated announcements.
+Version 1.2 fixes the focus problem, reads what is under the mouse and adds the navigation commands. Planned next: reading whole messages, message actions such as playing a voice message from the keyboard, and fewer repeated announcements.
 
 ## Focus diagnostics add-on
 

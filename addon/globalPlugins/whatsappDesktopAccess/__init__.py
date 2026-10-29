@@ -7,6 +7,14 @@
 
 Original work, written against NVDA's public developer API.
 
+Why a global plugin
+-------------------
+NVDA loads only one app module per program, so add-ons that ship an app module for
+WhatsApp replace each other (and NVDA's own one). This add-on is a global plugin instead:
+it adds its behaviour to the WhatsApp objects and leaves NVDA's built-in app module, or the
+one of another WhatsApp add-on, in place. Everything it does first checks that the object
+or the foreground window belongs to WhatsApp, so other programs are not affected.
+
 Focus guard
 -----------
 Two things make NVDA lose the message field while typing:
@@ -71,10 +79,10 @@ from comInterfaces import IAccessible2Lib as IA2
 import addonHandler
 import api
 import appModuleHandler
-import braille
 import config
 import controlTypes
 import core
+import globalPluginHandler
 import IAccessibleHandler
 import locationHelper
 import mouseHandler
@@ -83,20 +91,11 @@ import speech
 import textInfos
 import textUtils
 import ui
-import vision
 import winUser
 from logHandler import log
 from NVDAObjects import NVDAObject, NVDAObjectTextInfo
 from NVDAObjects.IAccessible import IAccessible, getNVDAObjectFromEvent
 from scriptHandler import script
-
-try:
-	# Extend NVDA's own WhatsApp support (it turns browse mode off by default) instead of replacing it.
-	from nvdaBuiltin.appModules.whatsapp_root import AppModule as _BaseAppModule
-except ImportError:
-	# NVDA versions released before the built-in WhatsApp app module.
-	class _BaseAppModule(appModuleHandler.AppModule):
-		disableBrowseModeByDefault = True
 
 
 addonHandler.initTranslation()
@@ -144,6 +143,13 @@ _PAGE_WINDOW_CLASS = "Chrome_RenderWidgetHostHWND"
 _PAGE_TOP_WINDOW_CLASS = "Chrome_WidgetWin_1"
 #: How long a pending silent return stays valid, in seconds.
 _SILENT_RETURN_SECONDS = 1.0
+#: The WinUI host process, and the WebView2 process that renders the page.
+_HOST_APP = "whatsapp.root"
+_PAGE_APP = "msedgewebview2"
+#: Window classes this add-on works with; objects in any other window are not checked at all.
+_WHATSAPP_WINDOW_CLASSES = frozenset((_HOST_PANE_CLASS, _TITLE_BAR_INPUT_CLASS, _PAGE_WINDOW_CLASS))
+#: How many top-level windows the WhatsApp check remembers the program of.
+_APP_CACHE_SIZE = 64
 
 #: Limits for one search of the page, so a very large chat can never freeze NVDA.
 _SEARCH_MAX_NODES = 4000
@@ -156,11 +162,7 @@ _ENUM_WINDOWS_PROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.L
 
 
 class _GuardState:
-	"""State shared by both app module instances.
-
-	NVDA runs one instance for WhatsApp.Root.exe (the WinUI host) and one for the
-	msedgewebview2.exe process that renders the page; both import this module.
-	"""
+	"""What the focus guard knows about the WhatsApp page."""
 
 	pageWindow = 0
 	silentTarget = None
@@ -209,6 +211,61 @@ def _isEditableField(obj) -> bool:
 		return False
 
 
+#: (top-level window, process ID) -> NVDA's app name for that process.
+_appNames = {}
+
+
+def _appNameOf(topWindow) -> str:
+	pid = winUser.getWindowThreadProcessID(topWindow)[0]
+	key = (topWindow, pid)
+	name = _appNames.get(key)
+	if name is None:
+		try:
+			name = appModuleHandler.getAppNameFromProcessID(pid)
+		except Exception:
+			# Not remembered: the process may still be starting, so ask again next time.
+			return ""
+		if len(_appNames) >= _APP_CACHE_SIZE:
+			_appNames.clear()
+		_appNames[key] = name
+	return name
+
+
+def _isWhatsAppWindow(hwnd) -> bool:
+	"""Whether hwnd belongs to WhatsApp: its WinUI window, or the page WebView2 draws for it.
+
+	Runs for objects in the window classes this add-on works with, in every program (Chrome and
+	Edge use the same page window class), so it only reads window data and remembers the program.
+	"""
+	try:
+		topWindow = winUser.getAncestor(hwnd, winUser.GA_ROOT)
+		if not topWindow:
+			return False
+		app = _appNameOf(topWindow)
+		if app == _HOST_APP:
+			return True
+		# WebView2 serves many programs; WhatsApp's page window is titled "WhatsApp" or "(3) WhatsApp".
+		return app == _PAGE_APP and winUser.getWindowText(topWindow).endswith("WhatsApp")
+	except Exception:
+		return False
+
+
+def _isWhatsAppObject(obj) -> bool:
+	try:
+		return obj.windowClassName in _WHATSAPP_WINDOW_CLASSES and _isWhatsAppWindow(obj.windowHandle)
+	except Exception:
+		return False
+
+
+def _inWhatsApp() -> bool:
+	"""Whether WhatsApp is the foreground window."""
+	try:
+		foreground = api.getForegroundObject()
+		return foreground is not None and _isWhatsAppWindow(foreground.windowHandle)
+	except Exception:
+		return False
+
+
 def _searchPageWindow() -> int:
 	"""Find the WhatsApp page window when no focus event has told us yet."""
 	found = []
@@ -223,8 +280,7 @@ def _searchPageWindow() -> int:
 		if (
 			winUser.getClassName(hwnd) == _PAGE_TOP_WINDOW_CLASS
 			and winUser.getWindowText(hwnd).endswith("WhatsApp")
-			and appModuleHandler.getAppNameFromProcessID(winUser.getWindowThreadProcessID(hwnd)[0])
-			in ("whatsapp.root", "msedgewebview2")
+			and _appNameOf(hwnd) in (_HOST_APP, _PAGE_APP)
 		):
 			_user32.EnumChildWindows(hwnd, _ENUM_WINDOWS_PROC(onChild), 0)
 			if found:
@@ -274,6 +330,10 @@ def _requestSilentReturn(target) -> None:
 	if target == api.getFocusObject():
 		_GuardState.silentTarget = target
 		_GuardState.silentUntil = time.monotonic() + _SILENT_RETURN_SECONDS
+
+
+def _silentReportFocus():
+	"""Stands in for an object's reportFocus while its focus return is silent."""
 
 
 def _takeSilentReturn(obj) -> bool:
@@ -344,6 +404,21 @@ class NavigationTargets:
 		self.roleCounts = {}
 
 
+def _isCell(obj) -> bool:
+	"""Whether obj is a table cell, such as a chat in the chat list.
+
+	The page's own MSAA role is asked first: another WhatsApp add-on may change the role NVDA
+	reports for an object (one reports every cell as a pane), but not what the page says.
+	"""
+	try:
+		if obj.IAccessibleRole == oleacc.ROLE_SYSTEM_CELL:
+			return True
+	except Exception:
+		# Not an IAccessible object, or the element is gone.
+		pass
+	return _safeRole(obj) == controlTypes.Role.TABLECELL
+
+
 def _firstCell(table):
 	"""The first cell of the chat list: first-child steps, or a short search inside it."""
 	cell = _quickFirstCell(table)
@@ -355,7 +430,7 @@ def _firstCell(table):
 		node = queue.popleft()
 		visited += 1
 		for child in _safeChildren(node):
-			if _safeRole(child) == controlTypes.Role.TABLECELL:
+			if _isCell(child):
 				log.info("%s first chat found by a search inside the list (%d objects)" % (_NAV_LOG_TAG, visited))
 				return child
 			queue.append(child)
@@ -369,7 +444,7 @@ def _quickFirstCell(table):
 		node = _safeFirstChild(node)
 		if node is None:
 			return None
-		if _safeRole(node) == controlTypes.Role.TABLECELL:
+		if _isCell(node):
 			return node
 	return None
 
@@ -909,7 +984,7 @@ def _cachedTarget(which):
 		if table is None or _safeRole(table) != controlTypes.Role.TABLE:
 			return None
 		cell = _NavCache.lastChatCell
-		if cell is not None and _safeRole(cell) == controlTypes.Role.TABLECELL:
+		if cell is not None and _isCell(cell):
 			# The cell was remembered from any focus event; it counts only if it is in the chat list.
 			row = _safeParent(cell)
 			if row is not None and _safeParent(row) == table:
@@ -925,18 +1000,31 @@ def _cachedTarget(which):
 	return None
 
 
-class AppModule(_BaseAppModule):
+class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	# Translators: The category under which this add-on's commands appear in Input Gestures.
 	scriptCategory = _("WhatsApp Desktop Access")
 
-	def chooseNVDAObjectOverlayClasses(self, obj, clsList):
-		# Runs for every object NVDA creates in WhatsApp, so it must stay cheap: a window
-		# class compare first, and for page objects a single role query (not .role, which
-		# also reads the states and is never cached).
+	def getScript(self, gesture):
+		# The commands exist only in WhatsApp; anywhere else the keys reach the program as usual.
+		found = super().getScript(gesture)
+		if found is None or not _inWhatsApp():
+			return None
+		# NVDA asks global plugins before app modules: leave a key to a WhatsApp app module that uses it.
 		try:
-			windowClass = obj.windowClassName
+			appModule = api.getFocusObject().appModule
+			if appModule is not None and appModule.getScript(gesture) is not None:
+				return None
 		except Exception:
-			windowClass = ""
+			pass
+		return found
+
+	def chooseNVDAObjectOverlayClasses(self, obj, clsList):
+		# Runs for every object NVDA creates in every program, so it must stay cheap: a window
+		# class compare first, then the WhatsApp check (window data only), and for page objects
+		# a single role query (not .role, which also reads the states and is never cached).
+		if not _isWhatsAppObject(obj):
+			return
+		windowClass = obj.windowClassName
 		if windowClass == _HOST_PANE_CLASS:
 			clsList.insert(0, HostPane)
 		elif windowClass == _TITLE_BAR_INPUT_CLASS:
@@ -951,21 +1039,24 @@ class AppModule(_BaseAppModule):
 				isMenuPopup = False
 			if isMenuPopup:
 				clsList.insert(0, SelectionPopup)
-		super().chooseNVDAObjectOverlayClasses(obj, clsList)
 
 	def event_gainFocus(self, obj, nextHandler):
 		try:
-			if obj.windowClassName == _PAGE_WINDOW_CLASS:
+			if obj.windowClassName == _PAGE_WINDOW_CLASS and _isWhatsAppWindow(obj.windowHandle):
 				_setPageWindow(obj.windowHandle)
 				self._rememberFocus(obj)
 		except Exception:
 			pass
 		if _takeSilentReturn(obj):
-			# NVDA's focus is already back on this element. Update braille and vision,
-			# but do not announce the field again.
+			# NVDA's focus is already back on this element. Global plugins run before app modules,
+			# so the event still goes on (to braille, vision and any WhatsApp app module); only
+			# the object's own announcement is skipped.
 			log.info("%s focus returned silently" % _LOG_TAG)
-			braille.handler.handleGainFocus(obj)
-			vision.handler.handleGainFocus(obj)
+			obj.reportFocus = _silentReportFocus
+			try:
+				nextHandler()
+			finally:
+				del obj.reportFocus
 			return
 		nextHandler()
 
@@ -976,10 +1067,9 @@ class AppModule(_BaseAppModule):
 		nothing that creates objects. A remembered cell is checked against the chat list
 		only when it is used (see _cachedTarget).
 		"""
-		role = _safeRole(obj)
-		if role == controlTypes.Role.TABLECELL:
+		if _isCell(obj):
 			_NavCache.lastChatCell = obj
-		elif role == controlTypes.Role.EDITABLETEXT:
+		elif _safeRole(obj) == controlTypes.Role.EDITABLETEXT:
 			states = _safeStates(obj)
 			if (
 				controlTypes.State.MULTILINE in states
@@ -1001,7 +1091,11 @@ class AppModule(_BaseAppModule):
 			return False, False
 		return True, alreadyThere
 
-	def _moveTo(self, which, notFoundMessage):
+	def _moveTo(self, gesture, which, notFoundMessage):
+		if not _inWhatsApp():
+			# A gesture the user assigned in Input Gestures reaches the script without getScript.
+			gesture.send()
+			return
 		started = time.monotonic()
 		picked = _cachedTarget(which)
 		cached = picked is not None
@@ -1079,7 +1173,7 @@ class AppModule(_BaseAppModule):
 	)
 	def script_goToChatList(self, gesture):
 		# Translators: Spoken when the chat list could not be found.
-		self._moveTo("chatCell", _("Chat list not found"))
+		self._moveTo(gesture, "chatCell", _("Chat list not found"))
 
 	@script(
 		# Translators: Description of a command that moves the focus to the newest message.
@@ -1088,7 +1182,7 @@ class AppModule(_BaseAppModule):
 	)
 	def script_goToMessageList(self, gesture):
 		# Translators: Spoken when the message list could not be found.
-		self._moveTo("messageRow", _("Message list not found. Open a chat first."))
+		self._moveTo(gesture, "messageRow", _("Message list not found. Open a chat first."))
 
 	@script(
 		# Translators: Description of a command that moves the focus to the message field.
@@ -1097,4 +1191,4 @@ class AppModule(_BaseAppModule):
 	)
 	def script_goToMessageField(self, gesture):
 		# Translators: Spoken when the message field could not be found.
-		self._moveTo("composer", _("Message field not found. Open a chat first."))
+		self._moveTo(gesture, "composer", _("Message field not found. Open a chat first."))

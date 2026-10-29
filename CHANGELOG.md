@@ -3,6 +3,19 @@
 All notable changes to WhatsApp Desktop Access are listed here, newest first.
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-10-29
+
+### Changed
+
+- The add-on can be enabled together with other WhatsApp add-ons. It is now a global plugin instead of an app module. NVDA loads only one app module per program, so before, this add-on replaced the app module of any other WhatsApp add-on, or was replaced by it. Now NVDA's own WhatsApp support, or the app module of another WhatsApp add-on, stays in place, and this add-on adds its fixes and commands to it.
+- The add-on checks that an object or the foreground window belongs to WhatsApp before it does anything, so other programs, including WhatsApp Web in a browser, are not affected. Alt+1, Alt+2 and Alt+D reach other programs as before.
+- If another WhatsApp add-on also uses Alt+1, Alt+2 or Alt+D, the command of that add-on runs for that key.
+
+### Fixed
+
+- Alt+1 finds the chat list also when another WhatsApp add-on changes the role NVDA reports for the chats, for example as panes. Before, it announced "Chat list not found" in that case, and NVDA could pause for about a second. The add-on now recognizes a chat by the role the WhatsApp page itself reports.
+- Requires NVDA 2026.2 or later, the first version with NVDA's own WhatsApp support, which turns browse mode off in WhatsApp.
+
 ## [1.1.2] - 2026-10-20
 
 ### Performance

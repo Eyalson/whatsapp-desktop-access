@@ -280,6 +280,8 @@ def package():
     # using a path relative to addon/ so manifest.ini is at the ZIP root.
     with zipfile.ZipFile(output_filename, "w", zipfile.ZIP_DEFLATED) as zf:
         for dirpath, dirnames, filenames in os.walk(addon_dir):
+            # Python's bytecode cache (made when tests import the add-on) is not part of the add-on.
+            dirnames[:] = [d for d in dirnames if d != "__pycache__"]
             for filename in filenames:
                 full_path    = os.path.join(dirpath, filename)
                 archive_path = os.path.relpath(full_path, addon_dir)

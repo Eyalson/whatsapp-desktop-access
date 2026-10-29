@@ -49,19 +49,28 @@
 <h2>Requirements</h2>
 
 <ul>
-<li>NVDA 2026.1 or later. Tested with NVDA 2026.2.</li>
+<li>NVDA 2026.2 or later. Tested with NVDA 2026.2.</li>
 <li>WhatsApp Desktop from the Microsoft Store on Windows 11. Tested with version 2.2639.100.0.</li>
 </ul>
 
 <h2>Other WhatsApp add-ons</h2>
 
-<p>NVDA loads only one WhatsApp app module. If another WhatsApp add-on that includes an app module is installed and enabled, disable it while you use this add-on.</p>
+<p>This add-on does not include an app module, so it does not replace NVDA's own WhatsApp support or the app module of another WhatsApp add-on, and it can be enabled together with them. If another WhatsApp add-on also uses Alt+1, Alt+2 or Alt+D, the command of that add-on runs for that key.</p>
 
 <h2>Current limits</h2>
 
-<p>Version 1.1 fixes the focus problem, reads what is under the mouse and adds the three navigation commands. Reading whole messages, message actions such as playing a voice message from the keyboard, and reducing repeated announcements are planned for later versions.</p>
+<p>Version 1.2 fixes the focus problem, reads what is under the mouse and adds the three navigation commands. Reading whole messages, message actions such as playing a voice message from the keyboard, and reducing repeated announcements are planned for later versions.</p>
 
 <h2>Changes</h2>
+
+<h3>Version 1.2.0</h3>
+
+<ul>
+<li>The add-on can be enabled together with other WhatsApp add-ons. It no longer includes an app module, so it no longer replaces NVDA's own WhatsApp support or the app module of another WhatsApp add-on.</li>
+<li>Alt+1, Alt+2 and Alt+D work only in WhatsApp. In other programs the keys work as before.</li>
+<li>Alt+1 finds the chat list also when another WhatsApp add-on changes the role NVDA reports for the chats. Before, it announced "Chat list not found" in that case.</li>
+<li>Requires NVDA 2026.2 or later, the first version with NVDA's own WhatsApp support.</li>
+</ul>
 
 <h3>Version 1.1.2</h3>
 
