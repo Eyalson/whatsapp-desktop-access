@@ -3,6 +3,13 @@
 All notable changes to WhatsApp Desktop Access are listed here, newest first.
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-11-02
+
+### Fixed
+
+- When a message menu opens, NVDA announces its first item and no longer interrupts it with "dialog" and "menu". WhatsApp reports the menu twice, and the second report moved NVDA away from the item.
+- When the Copy image menu of the image viewer closes, NVDA returns to the page. Before, it stayed on an empty pane and announced "pane".
+
 ## [1.2.0] - 2026-10-29
 
 ### Changed

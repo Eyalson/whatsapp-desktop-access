@@ -32,6 +32,16 @@ that element is the one NVDA already had, the return is silent.
 
 The same pattern was used by NVDA itself for Microsoft Teams (nvaccess/nvda#11822).
 
+Menus:
+
+- A message menu in the page fires menu-popup-start twice, about 200 ms apart, and the first
+  item takes the focus in between. The second event moved NVDA away from that item, which cut
+  off its name, so the guard also ignores a popup while a menu item has the focus.
+- When the native menu of the image viewer closes, the focus lands on the window of the
+  WebView2 (class Chrome_WidgetWin_0), which NVDA announces as a pane. That window is treated
+  like the hosting pane. It also gets the focus just before the page when WhatsApp comes to the
+  foreground, so the page's own focus event is then dropped as a duplicate of the redirect.
+
 Navigation
 ----------
 Alt+1, Alt+2 and Alt+D move the focus to the chat list, the message list and the message
@@ -82,6 +92,7 @@ import appModuleHandler
 import config
 import controlTypes
 import core
+import eventHandler
 import globalPluginHandler
 import IAccessibleHandler
 import locationHelper
@@ -105,6 +116,10 @@ _NAV_LOG_TAG = "WA-NAV"
 _MOUSE_LOG_TAG = "WA-MOUSE"
 #: Window class of the WinUI pane that hosts the WebView2.
 _HOST_PANE_CLASS = "Microsoft.UI.Content.DesktopChildSiteBridge"
+#: Window class of the WebView2 inside that pane; the focus lands here after a native menu closes.
+_WEBVIEW_WINDOW_CLASS = "Chrome_WidgetWin_0"
+#: Window classes that never have useful focus of their own.
+_FOCUS_HOST_CLASSES = frozenset((_HOST_PANE_CLASS, _WEBVIEW_WINDOW_CLASS))
 #: Window class of the transparent WinUI window that takes the mouse over the title bar.
 _TITLE_BAR_INPUT_CLASS = "InputNonClientPointerSource"
 #: Window class of the WinUI window that holds the Minimize, Maximize and Close buttons.
@@ -147,7 +162,7 @@ _SILENT_RETURN_SECONDS = 1.0
 _HOST_APP = "whatsapp.root"
 _PAGE_APP = "msedgewebview2"
 #: Window classes this add-on works with; objects in any other window are not checked at all.
-_WHATSAPP_WINDOW_CLASSES = frozenset((_HOST_PANE_CLASS, _TITLE_BAR_INPUT_CLASS, _PAGE_WINDOW_CLASS))
+_WHATSAPP_WINDOW_CLASSES = _FOCUS_HOST_CLASSES | {_TITLE_BAR_INPUT_CLASS, _PAGE_WINDOW_CLASS}
 #: How many top-level windows the WhatsApp check remembers the program of.
 _APP_CACHE_SIZE = 64
 
@@ -928,6 +943,15 @@ class TitleBarInput(NVDAObject):
 			return None
 
 
+def _isMenuItem(obj) -> bool:
+	"""Whether obj is a menu item that is still alive, by the page's own MSAA role (see _isCell)."""
+	try:
+		return obj.IAccessibleRole == oleacc.ROLE_SYSTEM_MENUITEM
+	except Exception:
+		# Not an IAccessible object, or the element is gone.
+		return False
+
+
 class SelectionPopup(IAccessible):
 	"""A popup with role menu inside the WhatsApp page, such as the one shown next to selected text."""
 
@@ -938,14 +962,23 @@ class SelectionPopup(IAccessible):
 		if focus is not None and _isEditableField(focus) and focus.windowHandle == self.windowHandle:
 			log.info("%s ignored a menu popup while an edit field has focus" % _LOG_TAG)
 			return False
+		# NVDA makes the same check, but only for a focus event handled together with the popup.
+		item = eventHandler.lastQueuedFocusObject
+		if item is not None and _isMenuItem(item) and item.windowHandle == self.windowHandle:
+			log.info("%s ignored a menu popup while a menu item has focus" % _LOG_TAG)
+			return False
 		return super()._get_shouldAllowIAccessibleMenuStartEvent()
 
 
 class HostPane(NVDAObject):
-	"""The WinUI pane that hosts the WebView2. It never has useful focus of its own.
+	"""The WinUI pane that hosts the WebView2, or the window of the WebView2 inside it.
 
-	It is also what Windows reports under the mouse everywhere below the title bar.
+	Neither ever has useful focus of its own. The pane is also what Windows reports under the
+	mouse everywhere below the title bar.
 	"""
+
+	#: The element the focus on this object was last sent to.
+	_redirectedTo = None
 
 	def objectFromPointRedirect(self, x, y):
 		try:
@@ -966,7 +999,13 @@ class HostPane(NVDAObject):
 			"%s focus on the host pane returned to the page (%s, silent=%s)"
 			% (_LOG_TAG, getattr(target.role, "name", target.role), _GuardState.silentTarget is not None),
 		)
+		self._redirectedTo = target
 		return target
+
+	def isDuplicateIAccessibleEvent(self, obj):
+		# NVDA asks the object it last queued focus for, which is this one, not the redirect target.
+		# Without this, the page's own focus event would announce the target a second time.
+		return obj == self._redirectedTo or super().isDuplicateIAccessibleEvent(obj)
 
 
 def _cachedTarget(which):
@@ -1025,7 +1064,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if not _isWhatsAppObject(obj):
 			return
 		windowClass = obj.windowClassName
-		if windowClass == _HOST_PANE_CLASS:
+		if windowClass in _FOCUS_HOST_CLASSES:
 			clsList.insert(0, HostPane)
 		elif windowClass == _TITLE_BAR_INPUT_CLASS:
 			clsList.insert(0, TitleBarInput)
