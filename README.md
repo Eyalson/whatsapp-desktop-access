@@ -2,6 +2,8 @@
 
 An NVDA add-on that improves the accessibility of WhatsApp Desktop for Windows: the Microsoft Store app built on WinUI 3 and WebView2.
 
+Project page: [sontech.co.il/en/projects/whatsapp-nvda](https://sontech.co.il/en/projects/whatsapp-nvda/). Hebrew: [sontech.co.il/projects/whatsapp-nvda](https://sontech.co.il/projects/whatsapp-nvda/).
+
 ## What it does
 
 ### Keyboard commands
