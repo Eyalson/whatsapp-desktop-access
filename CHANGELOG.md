@@ -3,6 +3,20 @@
 All notable changes to WhatsApp Desktop Access are listed here, newest first.
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.2.4] - 2026-11-25
+
+### Added
+
+- On a message, the Applications key and Shift+F10 open the menu of that message, with the focus on its first item. Before, WhatsApp opened the menu of the whole chat (Select messages, Close chat) for these keys. The add-on uses WhatsApp's own keys for this: the right arrow to the message options button, then Enter. On a voice message the right arrow first reaches the Play button, so the key is pressed a second time to open the menu.
+
+### Fixed
+
+- When a message menu opens without the focus on any item, the focus moves to its first item, so the arrows move through the menu. Before, the arrows could go to the message list behind the menu and close it. Some menus, such as the one of an image message, add their items a moment after they open; the add-on waits up to one second for them.
+- When the reactions bar that opens next to a message menu takes the focus, the focus goes back to the first item of the menu.
+- One Escape closes a message menu. WhatsApp sometimes leaves a second menu open under the first, so Escape had to be pressed twice. The focus then returns to the message the menu was opened from.
+
+Tested with WhatsApp 2.2645.101.0 and NVDA 2026.3.1.
+
 ## [1.2.1] - 2026-11-02
 
 ### Fixed

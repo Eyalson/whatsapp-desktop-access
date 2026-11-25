@@ -16,6 +16,7 @@
 <li>Alt+1: move to the chat list. The focus goes to the open chat, or to the first chat.</li>
 <li>Alt+2: move to the message list. The focus goes to the newest message.</li>
 <li>Alt+D: move to the message field.</li>
+<li>Applications key or Shift+F10 on a message: open the menu of that message, with the focus on its first item. On a voice message, press the key a second time: the first press reaches the Play button.</li>
 </ul>
 
 <p>These keys are not used by WhatsApp itself. The commands find their targets by role, so they work in every WhatsApp language and keep working when WhatsApp changes its page markup. If a target is missing, for example when no chat is open, NVDA announces this. If the focus is already on the target, NVDA announces it again, so you always hear where you are. WhatsApp often puts the focus in the message field by itself when a chat opens.</p>
@@ -49,8 +50,8 @@
 <h2>Requirements</h2>
 
 <ul>
-<li>NVDA 2026.2 or later. Tested with NVDA 2026.2.</li>
-<li>WhatsApp Desktop from the Microsoft Store on Windows 11. Tested with version 2.2639.100.0.</li>
+<li>NVDA 2026.2 or later. Tested with NVDA 2026.3.1.</li>
+<li>WhatsApp Desktop from the Microsoft Store on Windows 11. Tested with version 2.2645.101.0.</li>
 </ul>
 
 <h2>Other WhatsApp add-ons</h2>
@@ -62,6 +63,15 @@
 <p>Version 1.2 fixes the focus problem, reads what is under the mouse and adds the three navigation commands. Reading whole messages, message actions such as playing a voice message from the keyboard, and reducing repeated announcements are planned for later versions.</p>
 
 <h2>Changes</h2>
+
+<h3>Version 1.2.4</h3>
+
+<ul>
+<li>On a message, the Applications key and Shift+F10 open the menu of that message, with the focus on its first item. Before, WhatsApp opened the menu of the whole chat for these keys.</li>
+<li>When a message menu opens without the focus on any item, the focus moves to its first item, so the arrows move through the menu.</li>
+<li>When the reactions bar next to a message menu takes the focus, the focus goes back to the menu.</li>
+<li>One Escape closes a message menu, and the focus returns to the message.</li>
+</ul>
 
 <h3>Version 1.2.1</h3>
 

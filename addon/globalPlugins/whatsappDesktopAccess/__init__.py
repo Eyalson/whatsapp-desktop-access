@@ -37,6 +37,17 @@ Menus:
 - A message menu in the page fires menu-popup-start twice, about 200 ms apart, and the first
   item takes the focus in between. The second event moved NVDA away from that item, which cut
   off its name, so the guard also ignores a popup while a menu item has the focus.
+- Sometimes a message menu opens without putting the focus on any item; the arrows then go to
+  the message list behind it and close it. A moment after the menu opens, the add-on checks
+  that an item has the focus, and if none has, it moves the focus to the first item. The popup
+  next to selected text in the message field is left alone.
+- Sometimes one Escape leaves a message menu open: the focus moves to an item of a second menu
+  under it. Escape is then sent once more, and the focus goes back to where the menu was opened.
+  Escape in a submenu, which returns to the item that opened it, is left alone.
+- On a message, the Applications key and Shift+F10 open the menu of the whole chat in WhatsApp.
+  There they open the menu of the message instead, the way WhatsApp's own keys do: the right
+  arrow (to the message options button), then Enter. The reactions bar that opens with the
+  menu takes the focus from the first menu item; the focus goes back to that item.
 - When the native menu of the image viewer closes, the focus lands on the window of the
   WebView2 (class Chrome_WidgetWin_0), which NVDA announces as a pane. That window is treated
   like the hosting pane. It also gets the focus just before the page when WhatsApp comes to the
@@ -95,6 +106,7 @@ import core
 import eventHandler
 import globalPluginHandler
 import IAccessibleHandler
+import keyboardHandler
 import locationHelper
 import mouseHandler
 import oleacc
@@ -172,6 +184,21 @@ _SEARCH_MAX_SECONDS = 3.0
 #: How far down the "first child" or "last child" chain the quick paths follow.
 _QUICK_MAX_DEPTH = 4
 
+#: How long a message menu may take to put the focus on an item before the add-on does, in ms.
+_MENU_FOCUS_CHECK_MS = 250
+#: How many objects the search for the first item of a menu may look at.
+_MENU_ITEM_SEARCH_MAX_NODES = 40
+#: How many times the focus check looks for the first item of a menu that has none yet.
+_MENU_FOCUS_ATTEMPTS = 4
+#: How long after Escape a focus event on a menu item means a second menu was under it, in s.
+_MENU_ESCAPE_SECONDS = 0.6
+#: How long after that menu is closed the focus is sent back to where the menu was opened, in s.
+_MENU_RETURN_SECONDS = 1.0
+#: How long each step of opening a message menu from the keyboard may take.
+_MENU_OPEN_SECONDS = 1.0
+#: How many objects of a menu without items are described in the log (roles only).
+_MENU_DESCRIBE_MAX_NODES = 20
+
 _user32 = ctypes.windll.user32
 _ENUM_WINDOWS_PROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
@@ -182,6 +209,32 @@ class _GuardState:
 	pageWindow = 0
 	silentTarget = None
 	silentUntil = 0.0
+
+
+class _MenuState:
+	"""Checks scheduled for a message menu in the page."""
+
+	#: The popup a focus check is scheduled for; None when no check is pending.
+	focusCheckFor = None
+	#: Until when a focus event counts as the result of Escape in a page menu (monotonic time).
+	escapeUntil = 0.0
+	#: The last page element with the focus that was not a menu item.
+	origin = None
+	#: Where the focus goes back to after a stacked menu was closed, and until when.
+	returnTo = None
+	returnUntil = 0.0
+	#: Opening a message menu from the keyboard: "" (not opening), "button" (waiting for the
+	#: message options button after the right arrow) or "menu" (waiting for the menu after Enter).
+	openStep = ""
+	openUntil = 0.0
+	#: The first menu item that got the focus while the menu was opening.
+	openItem = None
+
+	@classmethod
+	def stopOpening(cls):
+		cls.openStep = ""
+		cls.openUntil = 0.0
+		cls.openItem = None
 
 
 class _NavCache:
@@ -482,6 +535,39 @@ def _messageTarget(row):
 		if controlTypes.State.FOCUSABLE in _safeStates(child):
 			return child
 	return row
+
+
+def _isRow(obj) -> bool:
+	"""Whether obj is a table row, by the page's own MSAA role first (see _isCell)."""
+	try:
+		if obj.IAccessibleRole == oleacc.ROLE_SYSTEM_ROW:
+			return True
+	except Exception:
+		pass
+	return _safeRole(obj) == controlTypes.Role.TABLEROW
+
+
+def _isMessageElement(obj) -> bool:
+	"""Whether obj is a message in the message list: a row outside any table, or the element in it.
+
+	Chats in the chat list are cells of rows inside a table, so they never count. The focus
+	can sit two levels below the row (a section inside a section), so obj and up to two of its
+	parents are checked.
+	"""
+	try:
+		if obj is None or obj.windowClassName != _PAGE_WINDOW_CLASS or _isCell(obj):
+			return False
+	except Exception:
+		return False
+	node = obj
+	for _ in range(3):
+		if _isRow(node):
+			parent = _safeParent(node)
+			return parent is not None and _safeRole(parent) != controlTypes.Role.TABLE
+		node = _safeParent(node)
+		if node is None:
+			return False
+	return False
 
 
 def findNavigationTargets(root, want=None, clock=time.monotonic) -> NavigationTargets:
@@ -952,22 +1038,295 @@ def _isMenuItem(obj) -> bool:
 		return False
 
 
+def _hasSelectedText(field) -> bool:
+	"""Whether text is selected in field. When that cannot be told, assume it is."""
+	try:
+		return not field.makeTextInfo(textInfos.POSITION_SELECTION).isCollapsed
+	except Exception:
+		return True
+
+
+def _firstMenuItem(popup):
+	"""The first menu item inside popup, in document order, or None. Looks at a few objects only."""
+	stack = []
+	node = _safeFirstChild(popup)
+	looked = 0
+	while node is not None and looked < _MENU_ITEM_SEARCH_MAX_NODES:
+		looked += 1
+		if _isMenuItem(node):
+			return node
+		child = _safeFirstChild(node)
+		if child is not None:
+			stack.append(node)
+			node = child
+			continue
+		node = _safeNext(node)
+		while node is None and stack:
+			node = _safeNext(stack.pop())
+	return None
+
+
+def _safeNext(obj):
+	try:
+		return obj.next
+	except Exception:
+		return None
+
+
+def _scheduleMenuFocusCheck(popup):
+	"""Check a moment later that the menu has put the focus on one of its items."""
+	if _MenuState.focusCheckFor is not None:
+		# The menu fires menu-popup-start twice; one check is enough.
+		return
+	_MenuState.focusCheckFor = popup
+	core.callLater(_MENU_FOCUS_CHECK_MS, _ensureMenuFocus, popup)
+
+
+def _describeMenu(popup) -> str:
+	"""The roles inside popup, depth first, for the log. Never names: they hold message text."""
+	parts = []
+	stack = [(popup, 0)]
+	while stack and len(parts) < _MENU_DESCRIBE_MAX_NODES:
+		node, depth = stack.pop()
+		role = _safeRole(node)
+		parts.append("%d:%s" % (depth, getattr(role, "name", role)))
+		children = _safeChildren(node)
+		stack.extend((child, depth + 1) for child in reversed(children))
+	return " ".join(parts)
+
+
+#: Left and right Shift, and the key-up flag of keybd_event.
+_SHIFT_KEYS = (0xA0, 0xA1)
+_KEYEVENTF_KEYUP = 0x0002
+
+
+def _releaseShift() -> bool:
+	"""Let go of a Shift key that is still held, as after Shift+F10.
+
+	A key NVDA sends goes out with the modifiers that are held at that moment, so the right
+	arrow would reach WhatsApp as Shift+right arrow, which does not open the message menu.
+	Returns whether a Shift key was released.
+	"""
+	released = False
+	try:
+		with keyboardHandler.ignoreInjection():
+			for vk in _SHIFT_KEYS:
+				if winUser.getKeyState(vk) & 0x8000:
+					winUser.keybd_event(vk, 0, _KEYEVENTF_KEYUP, 0)
+					released = True
+	except Exception:
+		log.debugWarning("%s could not release Shift" % _LOG_TAG, exc_info=True)
+	return released
+
+
+def _describeAncestors(obj, levels=3) -> str:
+	"""obj and its parents for the log: NVDA role, MSAA role and window class. Never names."""
+	parts = []
+	node = obj
+	for depth in range(levels + 1):
+		if node is None:
+			break
+		role = _safeRole(node)
+		try:
+			msaaRole = node.IAccessibleRole
+		except Exception:
+			msaaRole = "-"
+		try:
+			windowClass = node.windowClassName
+		except Exception:
+			windowClass = "-"
+		parts.append("%d:%s/%s/%s" % (depth, getattr(role, "name", role), msaaRole, windowClass))
+		node = _safeParent(node)
+	return " ".join(parts) or "no focus"
+
+
+def _ensureMenuFocus(popup, attempt=1):
+	"""Put the focus on the first item of popup when the menu opened without focus on any item.
+
+	Then the arrows would go to the message list behind the menu, which also closes it. Some
+	menus (such as the one of an image message) add their items a moment after they open, so a
+	menu without items is checked again a few times.
+	"""
+	again = False
+	try:
+		item = eventHandler.lastQueuedFocusObject
+		if item is not None and _isMenuItem(item) and item.windowHandle == popup.windowHandle:
+			return
+		# A popup that has closed raises here, or is no longer a visible menu.
+		if popup.IAccessibleRole != oleacc.ROLE_SYSTEM_MENUPOPUP:
+			return
+		if controlTypes.State.INVISIBLE in popup.states:
+			return
+		first = _firstMenuItem(popup)
+		if first is None:
+			if attempt < _MENU_FOCUS_ATTEMPTS:
+				again = True
+				core.callLater(_MENU_FOCUS_CHECK_MS, _ensureMenuFocus, popup, attempt + 1)
+				return
+			log.info(
+				"%s menu opened without focus on an item, and no item was found after %d checks: %s"
+				% (_LOG_TAG, attempt, _describeMenu(popup)),
+			)
+			return
+		log.info(
+			"%s menu opened without focus on an item; focus moved to the first item (check %d)"
+			% (_LOG_TAG, attempt),
+		)
+		first.setFocus()
+	except Exception:
+		log.debugWarning("%s menu focus check failed" % _LOG_TAG, exc_info=True)
+	finally:
+		if not again:
+			_MenuState.focusCheckFor = None
+
+
 class SelectionPopup(IAccessible):
-	"""A popup with role menu inside the WhatsApp page, such as the one shown next to selected text."""
+	"""A popup with role menu inside the WhatsApp page: a message menu, or the popup next to selected text."""
 
 	def _get_shouldAllowIAccessibleMenuStartEvent(self) -> bool:
 		if controlTypes.State.FOCUSED in self.states:
+			_scheduleMenuFocusCheck(self)
 			return True
 		focus = api.getFocusObject()
 		if focus is not None and _isEditableField(focus) and focus.windowHandle == self.windowHandle:
 			log.info("%s ignored a menu popup while an edit field has focus" % _LOG_TAG)
+			if not _hasSelectedText(focus):
+				# Not the popup next to selected text: a message menu opened from the message field.
+				_scheduleMenuFocusCheck(self)
 			return False
 		# NVDA makes the same check, but only for a focus event handled together with the popup.
 		item = eventHandler.lastQueuedFocusObject
 		if item is not None and _isMenuItem(item) and item.windowHandle == self.windowHandle:
 			log.info("%s ignored a menu popup while a menu item has focus" % _LOG_TAG)
 			return False
+		_scheduleMenuFocusCheck(self)
 		return super()._get_shouldAllowIAccessibleMenuStartEvent()
+
+
+def _inPopupMenu(obj, levels=2) -> bool:
+	"""Whether one of the first parents of obj is a menu popup, by the page's own MSAA role."""
+	node = obj
+	for _ in range(levels):
+		node = _safeParent(node)
+		if node is None:
+			return False
+		try:
+			if node.IAccessibleRole == oleacc.ROLE_SYSTEM_MENUPOPUP:
+				return True
+		except Exception:
+			return False
+	return False
+
+
+def _followMenuOpen(obj) -> bool:
+	"""Lead a focus event while a message menu is being opened from the keyboard.
+
+	WhatsApp's right arrow on a message only moves to its "message options" button; Enter on
+	that button opens the menu and, next to it, the reactions bar, which then takes the focus
+	from the first menu item. So: the button is pressed without being announced, and when the
+	reactions bar takes the focus, the focus goes back to the menu item that had it.
+
+	Returns True when obj is not to be announced.
+	"""
+	step = _MenuState.openStep
+	if not step:
+		return False
+	now = time.monotonic()
+	if now > _MenuState.openUntil:
+		log.info("%s opening the message menu: nothing came in time (step %s)" % (_LOG_TAG, step))
+		_MenuState.stopOpening()
+		return False
+	if step == "button":
+		if (
+			_safeRole(obj) == controlTypes.Role.BUTTON
+			and controlTypes.State.COLLAPSED in _safeStates(obj)
+		):
+			_MenuState.openStep = "menu"
+			_MenuState.openUntil = now + _MENU_OPEN_SECONDS
+			log.info("%s message options button reached; pressing it" % _LOG_TAG)
+			keyboardHandler.KeyboardInputGesture.fromName("enter").send()
+			return True
+		log.info("%s after the arrow the focus went elsewhere: %s" % (_LOG_TAG, _describeAncestors(obj, 1)))
+		_MenuState.stopOpening()
+		return False
+	if _isMenuItem(obj):
+		if _MenuState.openItem is None:
+			_MenuState.openItem = obj
+		return False
+	item = _MenuState.openItem
+	if item is not None and _inPopupMenu(obj):
+		_MenuState.stopOpening()
+		try:
+			item.setFocus()
+		except Exception:
+			log.debugWarning("%s could not go back to the menu" % _LOG_TAG, exc_info=True)
+			return False
+		log.info("%s the reactions bar took the focus; it went back to the menu" % _LOG_TAG)
+		return True
+	log.info(
+		"%s after Enter the focus went elsewhere (menu item seen: %s): %s"
+		% (_LOG_TAG, item is not None, _describeAncestors(obj, 2))
+	)
+	_MenuState.stopOpening()
+	return False
+
+
+def _afterMenuEscape(obj) -> bool:
+	"""Handle a focus event in the page that follows Escape in a page menu.
+
+	A message menu fires menu-popup-start twice, and sometimes Escape closes only the top one:
+	the focus then moves to an item of the menu under it. That menu is closed with one more
+	Escape, and the focus goes back to where it was before the menu opened (WhatsApp would put
+	it in the message field). A submenu is not closed twice: Escape in a submenu returns to the
+	item that opened it, which has a popup of its own.
+
+	Returns True when obj is not to be announced.
+	"""
+	now = time.monotonic()
+	if _MenuState.escapeUntil:
+		inTime = now <= _MenuState.escapeUntil
+		_MenuState.escapeUntil = 0.0
+		if (
+			inTime
+			and _isMenuItem(obj)
+			and controlTypes.State.HASPOPUP not in _safeStates(obj)
+		):
+			log.info("%s a menu stayed open after Escape; closing it" % _LOG_TAG)
+			_MenuState.returnTo = _MenuState.origin
+			_MenuState.returnUntil = now + _MENU_RETURN_SECONDS
+			keyboardHandler.KeyboardInputGesture.fromName("escape").send()
+			return True
+		return False
+	target = _MenuState.returnTo
+	if target is None:
+		return False
+	if now > _MenuState.returnUntil:
+		_MenuState.returnTo = None
+		return False
+	if _isMenuItem(obj):
+		# Still the menu that is being closed.
+		return True
+	_MenuState.returnTo = None
+	if obj == target:
+		return False
+	try:
+		target.setFocus()
+	except Exception:
+		# The element is gone; let WhatsApp's own focus be announced.
+		log.debugWarning("%s could not return after the menu" % _LOG_TAG, exc_info=True)
+		return False
+	log.info("%s focus returned to where the menu was opened" % _LOG_TAG)
+	return True
+
+
+class PageMenuItem(IAccessible):
+	"""An item of a menu inside the WhatsApp page."""
+
+	def script_closeMenu(self, gesture):
+		_MenuState.escapeUntil = time.monotonic() + _MENU_ESCAPE_SECONDS
+		gesture.send()
+
+	__gestures = {"kb:escape": "closeMenu"}
 
 
 class HostPane(NVDAObject):
@@ -1073,24 +1432,32 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			if beingMade is not None and obj.IAccessibleObject is beingMade:
 				clsList.insert(0, HoverControl)
 			try:
-				isMenuPopup = obj.IAccessibleRole == oleacc.ROLE_SYSTEM_MENUPOPUP
+				iaRole = obj.IAccessibleRole
 			except Exception:
-				isMenuPopup = False
-			if isMenuPopup:
+				iaRole = None
+			if iaRole == oleacc.ROLE_SYSTEM_MENUPOPUP:
 				clsList.insert(0, SelectionPopup)
+			elif iaRole == oleacc.ROLE_SYSTEM_MENUITEM:
+				clsList.insert(0, PageMenuItem)
 
 	def event_gainFocus(self, obj, nextHandler):
+		menuSilent = False
 		try:
 			if obj.windowClassName == _PAGE_WINDOW_CLASS and _isWhatsAppWindow(obj.windowHandle):
 				_setPageWindow(obj.windowHandle)
 				self._rememberFocus(obj)
+				menuSilent = _followMenuOpen(obj) or _afterMenuEscape(obj)
+				if not menuSilent and not _isMenuItem(obj):
+					_MenuState.origin = obj
 		except Exception:
 			pass
-		if _takeSilentReturn(obj):
-			# NVDA's focus is already back on this element. Global plugins run before app modules,
+		returnSilent = not menuSilent and _takeSilentReturn(obj)
+		if returnSilent:
+			log.info("%s focus returned silently" % _LOG_TAG)
+		if menuSilent or returnSilent:
+			# NVDA's focus is already on this element. Global plugins run before app modules,
 			# so the event still goes on (to braille, vision and any WhatsApp app module); only
 			# the object's own announcement is skipped.
-			log.info("%s focus returned silently" % _LOG_TAG)
 			obj.reportFocus = _silentReportFocus
 			try:
 				nextHandler()
@@ -1231,3 +1598,25 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def script_goToMessageField(self, gesture):
 		# Translators: Spoken when the message field could not be found.
 		self._moveTo(gesture, "composer", _("Message field not found. Open a chat first."))
+
+	@script(
+		# Translators: Description of a command that opens the menu of the focused message.
+		description=_("Open the menu of the focused message"),
+		gestures=["kb:applications", "kb:shift+f10"],
+	)
+	def script_messageMenu(self, gesture):
+		# On a message, WhatsApp opens the menu of the whole chat for these keys. Its own way to
+		# the message menu is the right arrow (to the message options button) and then Enter;
+		# _followMenuOpen does the rest. Anywhere else the key works as usual.
+		focus = api.getFocusObject()
+		inWhatsApp = _inWhatsApp()
+		if inWhatsApp and _isMessageElement(focus):
+			released = _releaseShift()
+			log.info("%s menu key on a message: opening the message menu (shift released: %s)" % (_LOG_TAG, released))
+			_MenuState.stopOpening()
+			_MenuState.openStep = "button"
+			_MenuState.openUntil = time.monotonic() + _MENU_OPEN_SECONDS
+			keyboardHandler.KeyboardInputGesture.fromName("rightArrow").send()
+			return
+		log.info("%s menu key passed on (inWhatsApp=%s): %s" % (_LOG_TAG, inWhatsApp, _describeAncestors(focus)))
+		gesture.send()

@@ -13,6 +13,9 @@ Project page: [sontech.co.il/en/projects/whatsapp-nvda](https://sontech.co.il/en
 | Alt+1 | Move to the chat list: the open chat, or the first chat |
 | Alt+2 | Move to the message list: the newest message |
 | Alt+D | Move to the message field |
+| Applications or Shift+F10 on a message | Open the menu of that message, with the focus on its first item |
+
+On a message, WhatsApp itself opens the menu of the whole chat for the Applications key and Shift+F10. The add-on uses WhatsApp's own keys instead: the right arrow to the message options button, then Enter. If the reactions bar next to the menu takes the focus, the focus goes back to the menu. On a voice message the right arrow first reaches the Play button, so press the key a second time. One Escape closes the menu and returns to the message.
 
 These keys are not used by WhatsApp itself. The targets are found by role and state, never by CSS class names, so the commands work in every WhatsApp language and survive page changes. If a target is missing, for example when no chat is open, NVDA announces this. If the focus is already on the target, NVDA announces it again (WhatsApp often puts the focus in the message field by itself when a chat opens). Other keys can be assigned in NVDA's Input Gestures dialog, under "WhatsApp Desktop Access".
 
@@ -41,8 +44,8 @@ Background: [nvaccess/nvda#19772](https://github.com/nvaccess/nvda/issues/19772)
 
 ## Requirements
 
-- NVDA 2026.2 or later. Tested with NVDA 2026.2.
-- WhatsApp Desktop from the Microsoft Store on Windows 11. Tested with version 2.2639.100.0.
+- NVDA 2026.2 or later. Tested with NVDA 2026.3.1.
+- WhatsApp Desktop from the Microsoft Store on Windows 11. Tested with version 2.2645.101.0.
 
 ## Installation
 

@@ -17,6 +17,9 @@ msgstr "עבור לרשימת ההודעות"
 msgid "Move to the message field"
 msgstr "עבור לשדה כתיבת ההודעה"
 
+msgid "Open the menu of the focused message"
+msgstr "פתח את תפריט ההודעה שבפוקוס"
+
 msgid "Chat list not found"
 msgstr "רשימת השיחות לא נמצאה"
 
